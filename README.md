@@ -1,5 +1,19 @@
 # godot-raycast-bridge
 
+## Disclaimer
+
+This extension has been coded (or hallucinated, yet to be fully verified) by Claude Code
+(Sonnet 4.6) at my direction. I simply guided it to look into the Godot source code to see
+if there was any way around the horrendously inefficient method Godot uses to return the
+results of its raycasts. To be clear - the Godot implementation is easy to use and works
+great if you have a more typical number of raycasts per frame, a few dozen is hardly going
+to tickle the garbage collector. In my case though, I'm shooting 15 rays per wheel, 10 times
+per tick, 60 ticks per second, on a minimum of four wheels.
+
+From beyond this point, you are in Magical Claude-land. Good luck.
+
+## What this is
+
 A GDExtension for Godot 4 (.NET) that provides allocation-reduced raycasting, eliminating
 the .NET GC pressure caused by `PhysicsDirectSpaceState3D.IntersectRay` at high call rates.
 
@@ -7,7 +21,7 @@ the .NET GC pressure caused by `PhysicsDirectSpaceState3D.IntersectRay` at high 
 
 Calling `IntersectRay` from C# causes the Mono glue layer to wrap the native result in a
 `Godot.Collections.Dictionary` — a finalizable managed object — on every call. At high
-call rates (e.g. vehicle suspension raycasts: 12+ per wheel at 60 Hz), this generates
+call rates, this generates
 thousands of finalizable objects per second and measurable GC pressure.
 
 This extension intercepts the result in C++ before it crosses the managed/unmanaged
