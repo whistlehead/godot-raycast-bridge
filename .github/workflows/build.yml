@@ -186,7 +186,7 @@ jobs:
           path: bin/
 
       - name: Zip release
-        run: zip -r RaycastBridge-${{ github.ref_name }}-godot${{ matrix.godot_version }}.zip bin/ RaycastBridge.gdextension
+        run: zip -r RaycastBridge-${{ github.ref_name }}-godot${{ matrix.godot_version }}.zip bin/ RaycastBridge.gdextension RaycastBridge.cs
 
       - uses: softprops/action-gh-release@v2
         with:

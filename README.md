@@ -12,36 +12,37 @@ per tick, 60 ticks per second, on a minimum of four wheels.
 
 From beyond this point, you are in Magical Claude-land. Good luck.
 
-## What this is
+## What this is and why it exists
 
-A GDExtension for Godot 4 (.NET) that provides allocation-reduced raycasting, eliminating
-the .NET GC pressure caused by `PhysicsDirectSpaceState3D.IntersectRay` at high call rates.
-
-## Why this exists
+A GDExtension for Godot 4 (.NET) that reduces .NET GC pressure when calling
+`PhysicsDirectSpaceState3D.IntersectRay` at high rates.
 
 Calling `IntersectRay` from C# causes the Mono glue layer to wrap the native result in a
 `Godot.Collections.Dictionary` — a finalizable managed object — on every call. At high
-call rates, this generates thousands of finalizable objects per second and measurable GC
+call rates this generates thousands of finalizable objects per second and measurable GC
 pressure.
 
 This extension intercepts the result in C++ before it crosses the managed/unmanaged
 boundary, extracts the values into a flat `PackedFloat32Array`, and returns that to C#
 instead. The managed Dictionary wrapper is never created. See
-`docs/raycast_allocation_research.md` for the full investigation.
+`docs/godot_raycast_allocation_research.md` for the full investigation.
 
 ## API
 
 Two methods are registered on the `RaycastBridge` singleton:
 
 **`intersect_ray_packed(space, from, to, collision_mask) → PackedFloat32Array`**  
-Returns a newly allocated `PackedFloat32Array`. One managed object per call; no finalizer.
-Simpler to use; acceptable at lower call rates.
+Casts a single ray. Returns a `PackedFloat32Array` of 8 floats. One managed object per
+call; no finalizer. Use for low-frequency raycasts.
 
-**`intersect_ray_into(out_buffer, space, from, to, collision_mask) → void`**  
-Writes into a caller-supplied `PackedFloat32Array`. Zero managed allocations per call when
-the buffer is pre-allocated. Use this on the hot path.
+**`intersect_rays_batch(in_buffer, space, ray_count, collision_mask) → PackedFloat32Array`**  
+Casts N rays in a single call. Returns a `PackedFloat32Array` of `ray_count × 8` floats.
+Compared to calling `intersect_ray_packed` N times: produces one managed allocation instead
+of N, and one GDExtension dispatch instead of N. The per-ray C++ heap work
+(`PhysicsRayQueryParameters3D` + `DictionaryPrivate`) still occurs N times — that cost is
+irreducible without engine-level access and does not affect the .NET GC.
 
-**Result buffer layout** (8 floats, both methods):
+### Result buffer layout (8 floats per ray)
 
 | Index | Content |
 |---|---|
@@ -50,19 +51,122 @@ the buffer is pre-allocated. Use this on the hot path.
 | `[4–6]` | Normal (x, y, z) — world space, unit vector |
 | `[7]` | Collider instance ID (cast to float) |
 
+For the batch method the output is `ray_count` of these records laid end to end (stride 8).
+
+### Batch input buffer layout (`ray_count × 7` floats, stride 7 per ray)
+
+| Offset | Content |
+|---|---|
+| `+0..+2` | Origin (x, y, z) — world space |
+| `+3..+5` | Direction (x, y, z) — world space, need not be normalised |
+| `+6` | Max distance — ray endpoint = origin + direction × max_dist |
+
+`collision_mask` applies uniformly to all rays in the batch. If `in_buffer.Size()` does
+not equal `ray_count × 7`, all results are returned as miss.
+
 ---
 
-## Using pre-built binaries
+## Project setup
+
+**1. Get the binaries**
 
 Pre-built binaries for Windows (x86-64, ARM64) and macOS (Universal) are attached to each
-[GitHub Release](../../releases). Download the zip from the latest release and extract it —
-you'll get a `bin/` folder and `RaycastBridge.gdextension`. Copy both into your Godot
-project root.
+[GitHub Release](../../releases). Download the zip from the latest release and extract it
+directly into your Godot project root:
+
+```
+YourGodotProject/
+├── bin/
+│   ├── RaycastBridge.windows.template_release.x86_64.dll
+│   ├── RaycastBridge.windows.template_release.arm64.dll
+│   └── RaycastBridge.macos.template_release.universal.dylib
+├── RaycastBridge.gdextension
+└── RaycastBridge.cs
+```
 
 The `bin/` folder is not committed to this repository. Releases are the distribution
 mechanism; build from source if you need binaries outside of a tagged release.
 
-See [Project setup](#project-setup) below for how to wire it up in Godot.
+**2. Add the autoload singleton**
+
+In Godot: `Project → Project Settings → Autoload`  
+Add a new entry pointing to `RaycastBridge.cs` (included in this repository) with the
+name `RaycastBridge`. Godot will instantiate it at startup and make it accessible from
+any node as:
+
+```csharp
+var bridge = GetNode<RaycastBridge>("/root/RaycastBridge");
+```
+
+> The GDExtension native class is registered internally as `RaycastBridgeNative` to avoid
+> a name collision with the C# autoload. You do not need to interact with it directly.
+
+**3. Use from C#**
+
+#### `IntersectRay` — single ray
+
+```csharp
+using Godot;
+
+public partial class MyNode : Node
+{
+    private RaycastBridge _bridge;
+
+    public override void _Ready()
+    {
+        _bridge = GetNode<RaycastBridge>("/root/RaycastBridge");
+    }
+
+    private void CastRay(Vector3 from, Vector3 to, uint collisionMask)
+    {
+        var spaceState = GetWorld3D().DirectSpaceState;
+        var result = _bridge.IntersectRay(spaceState, from, to, collisionMask);
+
+        bool    hit      = RaycastBridge.GetHit(result, 0);
+        Vector3 position = RaycastBridge.GetPosition(result, 0);
+        Vector3 normal   = RaycastBridge.GetNormal(result, 0);
+    }
+}
+```
+
+#### `IntersectRaysBatch` — N rays, one call
+
+```csharp
+using Godot;
+
+public partial class RaycastOrchestrator : Node
+{
+    private const int RayCount = 12; // e.g. 3 rays × 4 wheels
+
+    private readonly PackedFloat32Array _batchIn = new PackedFloat32Array();
+    private RaycastBridge _bridge;
+
+    public override void _Ready()
+    {
+        _batchIn.Resize(RayCount * 7);
+        _bridge = GetNode<RaycastBridge>("/root/RaycastBridge");
+    }
+
+    private void DispatchAndRead(PhysicsDirectSpaceState3D spaceState, uint collisionMask)
+    {
+        // Pack rays from wheel poses before calling:
+        for (int i = 0; i < RayCount; i++)
+            RaycastBridge.PackRay(_batchIn, i, origin, direction, maxDist);
+
+        // Single GDExtension call for all rays:
+        var results = _bridge.IntersectRaysBatch(_batchIn, spaceState, RayCount, collisionMask);
+
+        // Read results by ray index:
+        for (int i = 0; i < RayCount; i++)
+        {
+            bool    hit      = RaycastBridge.GetHit(results, i);
+            Vector3 position = RaycastBridge.GetPosition(results, i);
+            Vector3 normal   = RaycastBridge.GetNormal(results, i);
+            // ... distribute to wheels
+        }
+    }
+}
+```
 
 ### Platform limitations
 
@@ -111,8 +215,6 @@ Fewer restrictions apply:
 RaycastBridge/
 ├── godot-cpp/              # gitignored — created by setup.py
 │   └── 4.3/                # one sub-folder per Godot version
-├── build/                  # gitignored — SCons intermediates
-│   └── windows-x86_64/
 ├── bin/                    # compiled output (.dll / .dylib)
 ├── src/                    # C++ source
 ├── SConstruct
@@ -226,62 +328,11 @@ faster.
 
 ---
 
-## Project setup
-
-**1. Copy files into your Godot project**
-
-Download the zip from the [latest Release](../../releases/latest) and extract it directly
-into your Godot project root. The layout should look like this:
-
-```
-YourGodotProject/
-├── bin/
-│   ├── RaycastBridge.windows.template_release.x86_64.dll
-│   ├── RaycastBridge.windows.template_release.arm64.dll
-│   └── RaycastBridge.macos.template_release.universal.dylib
-└── RaycastBridge.gdextension
-```
-
-**2. Add the autoload singleton**
-
-In Godot: `Project → Project Settings → Autoload`  
-Add a new entry pointing to a scene or script that instantiates a `RaycastBridge` node.
-
-The simplest approach: create a `RaycastBridge.tscn` containing a single `RaycastBridge`
-node (the class registered by this extension), and add that scene as an autoload with the
-name `RaycastBridge`. It will then be accessible from C# as:
-
-```csharp
-GetNode<GodotObject>("/root/RaycastBridge")
-```
-
-**3. Use from C#**
-
-```csharp
-// Pre-allocate once (e.g. in _Ready):
-var buffer = new PackedFloat32Array();
-buffer.Resize(8);
-var raycastBridge = GetNode<GodotObject>("/root/RaycastBridge");
-
-// Per raycast (hot path — zero managed allocations):
-raycastBridge.Call("intersect_ray_into", buffer, spaceState, from, to, collisionMask);
-
-bool hit      = buffer[0] > 0.5f;
-var  position = new Vector3(buffer[1], buffer[2], buffer[3]);
-var  normal   = new Vector3(buffer[4], buffer[5], buffer[6]);
-```
-
----
-
 ## Godot version compatibility
 
-Release zips are built against **Godot 4.3, 4.4, and 4.5**. Minimum supported version is
-4.3. Each zip is compiled against the matching `godot-cpp` branch and is not
-interchangeable — use the zip that matches your editor version.
-
-The 4.5 binary is confirmed to also load correctly in Godot 4.6.x, as the GDExtension ABI
-did not change between those releases. This is not guaranteed to hold for all future
-versions.
+Release zips are built against **Godot 4.3, 4.4, and 4.5**. Each zip is compiled against
+the matching `godot-cpp` branch and is not interchangeable — use the zip that matches your
+editor version.
 
 The extension uses no version-specific APIs beyond `PhysicsDirectSpaceState3D`, so it
 should continue to work on future 4.x releases. When a new `godot-cpp` stable branch

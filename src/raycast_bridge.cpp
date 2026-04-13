@@ -10,7 +10,7 @@ using namespace godot;
 // Shared implementation
 // ---------------------------------------------------------------------------
 
-void RaycastBridge::fill_result(
+void RaycastBridgeNative::fill_result(
     float*                     dest,
     PhysicsDirectSpaceState3D* space,
     Vector3                    from,
@@ -64,7 +64,7 @@ void RaycastBridge::fill_result(
 // Version 1 — one PackedFloat32Array allocated per call as the return value
 // ---------------------------------------------------------------------------
 
-PackedFloat32Array RaycastBridge::intersect_ray_packed(
+PackedFloat32Array RaycastBridgeNative::intersect_ray_packed(
     PhysicsDirectSpaceState3D* space,
     Vector3                    from,
     Vector3                    to,
@@ -77,34 +77,59 @@ PackedFloat32Array RaycastBridge::intersect_ray_packed(
 }
 
 // ---------------------------------------------------------------------------
-// Version 2 — zero C# allocations per call; caller owns and reuses the buffer
+// Version 2 — batch: N rays in one call, result returned by value
+//
+// PackedFloat32Array is ref-counted. Godot does not support mutating a
+// caller-supplied array across the GDExtension boundary (ClassDB passes
+// Variant arguments by value, so a ref parameter is not visible to C#).
+// Returning the output array is the correct pattern — the caller holds the
+// only other reference, so no deep copy occurs on return.
 // ---------------------------------------------------------------------------
 
-void RaycastBridge::intersect_ray_into(
-    PackedFloat32Array&        out_buffer,
+PackedFloat32Array RaycastBridgeNative::intersect_rays_batch(
+    PackedFloat32Array         in_buffer,
     PhysicsDirectSpaceState3D* space,
-    Vector3                    from,
-    Vector3                    to,
+    int                        ray_count,
     uint32_t                   collision_mask)
 {
-    // Defensive resize — should never trigger if the caller pre-allocates correctly,
-    // but avoids a buffer overrun if it does not.
-    if (out_buffer.size() != 8) out_buffer.resize(8);
+    PackedFloat32Array out;
+    out.resize(ray_count * 8);
 
-    fill_result(out_buffer.ptrw(), space, from, to, collision_mask);
+    // Early out — if space is null every ray is a miss; buffer is already zeroed.
+    if (!space) return out;
+
+    const int expected_in = ray_count * 7;
+    if (in_buffer.size() != expected_in) return out; // malformed input; return all-miss
+
+    const float* in  = in_buffer.ptr();
+    float*       dst = out.ptrw();
+
+    for (int i = 0; i < ray_count; ++i) {
+        const float* src = in + i * 7;
+
+        Vector3 origin   (src[0], src[1], src[2]);
+        Vector3 direction(src[3], src[4], src[5]);
+        float   max_dist  = src[6];
+
+        // fill_result allocates one PhysicsRayQueryParameters3D (C++ heap, not GC)
+        // and one DictionaryPrivate per ray — irreducible without engine-level access.
+        fill_result(dst + i * 8, space, origin, origin + direction * max_dist, collision_mask);
+    }
+
+    return out;
 }
 
 // ---------------------------------------------------------------------------
 // Binding registration
 // ---------------------------------------------------------------------------
 
-void RaycastBridge::_bind_methods()
+void RaycastBridgeNative::_bind_methods()
 {
     ClassDB::bind_method(
         D_METHOD("intersect_ray_packed", "space", "from", "to", "collision_mask"),
-        &RaycastBridge::intersect_ray_packed);
+        &RaycastBridgeNative::intersect_ray_packed);
 
     ClassDB::bind_method(
-        D_METHOD("intersect_ray_into", "out_buffer", "space", "from", "to", "collision_mask"),
-        &RaycastBridge::intersect_ray_into);
+        D_METHOD("intersect_rays_batch", "in_buffer", "space", "ray_count", "collision_mask"),
+        &RaycastBridgeNative::intersect_rays_batch);
 }

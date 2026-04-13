@@ -9,7 +9,9 @@ using namespace godot;
 void initialize_raycast_bridge(ModuleInitializationLevel p_level)
 {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
-    ClassDB::register_class<RaycastBridge>();
+    // Registered as "RaycastBridgeNative" (the class name from the GDCLASS macro)
+    // to avoid a collision with the C# autoload wrapper class "RaycastBridge".
+    ClassDB::register_class<RaycastBridgeNative>();
 }
 
 void uninitialize_raycast_bridge(ModuleInitializationLevel p_level)

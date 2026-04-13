@@ -20,7 +20,7 @@ namespace godot {
 ///   [7]   collider instance ID cast to float (precision sufficient for ID ranges in practice)
 ///
 /// Register as an autoload singleton in project.godot so C# can reach it via
-/// GetNode<GodotObject>("/root/RaycastBridge").
+/// GetNode<GodotObject>("/root/RaycastBridgeNative").
 ///
 /// ## Why this wrapper eliminates the .NET GC problem
 ///
@@ -41,8 +41,8 @@ namespace godot {
 /// is freed immediately when it goes out of scope at the end of fill_result().
 /// The PackedFloat32Array that crosses the boundary carries no finalizer overhead
 /// and, in intersect_ray_into mode, is reused rather than reallocated each call.
-class RaycastBridge : public Object {
-    GDCLASS(RaycastBridge, Object)
+class RaycastBridgeNative : public Object {
+    GDCLASS(RaycastBridgeNative, Object)
 
 protected:
     static void _bind_methods();
@@ -57,15 +57,27 @@ public:
         Vector3                    to,
         uint32_t                   collision_mask);
 
-    /// Cast a ray and write results directly into out_buffer.
-    /// out_buffer must be pre-allocated to exactly 8 elements by the caller;
-    /// it is resized defensively if not, but that resize would itself allocate.
-    /// No new managed objects are created on the C# side per call when used correctly.
-    void intersect_ray_into(
-        PackedFloat32Array&        out_buffer,
+    /// Cast N rays in a single call. Returns a PackedFloat32Array owned by the
+    /// caller; pass the same array back each tick and Godot's ref-counting avoids
+    /// a deep copy on return.
+    ///
+    /// in_buffer layout  (7 floats per ray, stride 7):
+    ///   [i*7 + 0..2]  origin     (x, y, z) — world space
+    ///   [i*7 + 3..5]  direction  (x, y, z) — world space, does not need to be normalised
+    ///                             ray endpoint = origin + direction * max_dist
+    ///   [i*7 + 6]     max_dist   scalar — length of the ray
+    ///
+    /// Return buffer layout (8 floats per ray, stride 8):
+    ///   [i*8 + 0]     hit flag   (1.0 = hit, 0.0 = miss)
+    ///   [i*8 + 1..3]  position   (x, y, z) — world space
+    ///   [i*8 + 4..6]  normal     (x, y, z) — world space, unit vector
+    ///   [i*8 + 7]     collider instance ID cast to float
+    ///
+    /// collision_mask applies uniformly to all rays in the batch.
+    PackedFloat32Array intersect_rays_batch(
+        PackedFloat32Array         in_buffer,
         PhysicsDirectSpaceState3D* space,
-        Vector3                    from,
-        Vector3                    to,
+        int                        ray_count,
         uint32_t                   collision_mask);
 
 private:
