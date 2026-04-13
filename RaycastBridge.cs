@@ -18,8 +18,8 @@ public static class RaycastBridge
         _native ??= ClassDB.Instantiate("RaycastBridgeNative").AsGodotObject();
 
     // Cached to avoid a StringName allocation on every Call() invocation.
-    private static readonly StringName MethodIntersectRayPacked  = "intersect_ray_packed";
-    private static readonly StringName MethodIntersectRaysBatch  = "intersect_rays_batch";
+    private static readonly StringName _methodIntersectRayPacked  = "intersect_ray_packed";
+    private static readonly StringName _methodIntersectRaysBatch  = "intersect_rays_batch";
 
     // -------------------------------------------------------------------------
     // Single ray
@@ -36,7 +36,7 @@ public static class RaycastBridge
         uint collisionMask)
     {
         return (PackedFloat32Array)Native.Call(
-            MethodIntersectRayPacked, space, from, to, collisionMask);
+            _methodIntersectRayPacked, space, from, to, collisionMask);
     }
 
     // -------------------------------------------------------------------------
@@ -58,7 +58,7 @@ public static class RaycastBridge
         uint collisionMask)
     {
         return (PackedFloat32Array)Native.Call(
-            MethodIntersectRaysBatch, inBuffer, space, rayCount, collisionMask);
+            _methodIntersectRaysBatch, inBuffer, space, rayCount, collisionMask);
     }
 
     // -------------------------------------------------------------------------
