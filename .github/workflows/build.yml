@@ -8,10 +8,7 @@ name: Build RaycastBridge
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 jobs:

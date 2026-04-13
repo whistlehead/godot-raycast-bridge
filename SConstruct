@@ -20,7 +20,7 @@
 import os
 from SCons.Script import SConscript, Glob, ARGUMENTS
 
-godot_version = ARGUMENTS.get("godot_version", "4.3")
+godot_version = ARGUMENTS.pop("godot_version", "4.3")
 godot_cpp_path = "godot-cpp/{}".format(godot_version)
 
 if not os.path.isdir(godot_cpp_path):
