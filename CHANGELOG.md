@@ -4,8 +4,8 @@
 
 Initial experimental release.
 
-- `intersect_ray_packed` — low-allocation raycast returning a new `PackedFloat32Array`
-- `intersect_ray_into` — zero-allocation raycast writing into a caller-supplied buffer
+- `intersect_ray_packed` — low-allocation single raycast returning a new `PackedFloat32Array`
+- `intersect_rays_batch` — batch raycast for N rays in one GDExtension dispatch
 - Windows x86-64 and ARM64 builds via GitHub Actions (MSVC)
 - macOS Universal build via GitHub Actions (`lipo` fat binary, ad-hoc signed)
 - Separate release zips for Godot 4.3, 4.4, and 4.5

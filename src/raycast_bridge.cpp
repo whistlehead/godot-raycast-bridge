@@ -18,7 +18,7 @@ void RaycastBridgeNative::fill_result(
     uint32_t                   collision_mask)
 {
     // Zero-initialise to "miss" before any early return.
-    for (int i = 0; i < 8; ++i) dest[i] = 0.f;
+    for (int i = 0; i < 9; ++i) dest[i] = 0.f;
 
     if (!space) return;
 
@@ -52,12 +52,19 @@ void RaycastBridgeNative::fill_result(
     dest[5] = nrm.y;
     dest[6] = nrm.z;
 
-    // Instance ID fits in a float for all IDs that Godot generates in practice
-    // (Godot ObjectIDs are 64-bit but low-valued; float has 24 bits of mantissa
-    // which covers IDs up to ~16 million without loss). If precise IDs are needed
-    // for large scenes, split across two floats or pass via RID instead.
+    // Store the full 64-bit instance ID by reinterpreting its raw bits into two
+    // float32 slots — no value conversion, so no precision loss.
+    //   dest[7] = low  32 bits (bits  0-31)
+    //   dest[8] = high 32 bits (bits 32-63)
+    // C# reconstructs with BitConverter.ToUInt32 + reassembly (see RaycastBridge.cs).
     Object* collider = Object::cast_to<Object>(hit["collider"]);
-    if (collider) dest[7] = static_cast<float>(collider->get_instance_id());
+    if (collider) {
+        uint64_t id = collider->get_instance_id();
+        uint32_t lo = static_cast<uint32_t>(id & 0xFFFFFFFFu);
+        uint32_t hi = static_cast<uint32_t>(id >> 32);
+        memcpy(&dest[7], &lo, sizeof(float));
+        memcpy(&dest[8], &hi, sizeof(float));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +78,7 @@ PackedFloat32Array RaycastBridgeNative::intersect_ray_packed(
     uint32_t                   collision_mask)
 {
     PackedFloat32Array out;
-    out.resize(8);
+    out.resize(9);
     fill_result(out.ptrw(), space, from, to, collision_mask);
     return out; // ref-counted; no deep copy on return
 }
@@ -93,7 +100,7 @@ PackedFloat32Array RaycastBridgeNative::intersect_rays_batch(
     uint32_t                   collision_mask)
 {
     PackedFloat32Array out;
-    out.resize(ray_count * 8);
+    out.resize(ray_count * 9);
 
     // Early out — if space is null every ray is a miss; buffer is already zeroed.
     if (!space) return out;
@@ -113,7 +120,7 @@ PackedFloat32Array RaycastBridgeNative::intersect_rays_batch(
 
         // fill_result allocates one PhysicsRayQueryParameters3D (C++ heap, not GC)
         // and one DictionaryPrivate per ray — irreducible without engine-level access.
-        fill_result(dst + i * 8, space, origin, origin + direction * max_dist, collision_mask);
+        fill_result(dst + i * 9, space, origin, origin + direction * max_dist, collision_mask);
     }
 
     return out;

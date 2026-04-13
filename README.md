@@ -32,26 +32,28 @@ instead. The managed Dictionary wrapper is never created. See
 Two methods are registered on the `RaycastBridge` singleton:
 
 **`intersect_ray_packed(space, from, to, collision_mask) → PackedFloat32Array`**  
-Casts a single ray. Returns a `PackedFloat32Array` of 8 floats. One managed object per
+Casts a single ray. Returns a `PackedFloat32Array` of 9 floats. One managed object per
 call; no finalizer. Use for low-frequency raycasts.
 
 **`intersect_rays_batch(in_buffer, space, ray_count, collision_mask) → PackedFloat32Array`**  
-Casts N rays in a single call. Returns a `PackedFloat32Array` of `ray_count × 8` floats.
+Casts N rays in a single call. Returns a `PackedFloat32Array` of `ray_count × 9` floats.
 Compared to calling `intersect_ray_packed` N times: produces one managed allocation instead
 of N, and one GDExtension dispatch instead of N. The per-ray C++ heap work
 (`PhysicsRayQueryParameters3D` + `DictionaryPrivate`) still occurs N times — that cost is
 irreducible without engine-level access and does not affect the .NET GC.
 
-### Result buffer layout (8 floats per ray)
+### Result buffer layout (9 floats per ray)
 
 | Index | Content |
 |---|---|
 | `[0]` | Hit flag: `1.0` = hit, `0.0` = miss |
 | `[1–3]` | Position (x, y, z) — world space, metres |
 | `[4–6]` | Normal (x, y, z) — world space, unit vector |
-| `[7]` | Collider instance ID (cast to float) |
+| `[7]` | Collider instance ID — low 32 bits, raw bit reinterpret (no precision loss) |
+| `[8]` | Collider instance ID — high 32 bits, raw bit reinterpret (no precision loss) |
 
-For the batch method the output is `ray_count` of these records laid end to end (stride 8).
+For the batch method the output is `ray_count` of these records laid end to end (stride 9).
+Use `RaycastBridge.GetColliderId(results, i)` to reconstruct the full 64-bit ID.
 
 ### Batch input buffer layout (`ray_count × 7` floats, stride 7 per ray)
 
@@ -294,8 +296,6 @@ ready-to-use binaries without any local toolchain setup.
 
 | Event | What happens |
 |---|---|
-| Push to `main` | Builds all platforms; binaries attached to the workflow run as artifacts (available for 90 days, useful for testing) |
-| Pull request to `main` | Same — lets you verify a PR builds cleanly before merging |
 | Push a version tag (`v*`) | Builds all platforms **and** creates a GitHub Release with all binaries attached as downloadable assets |
 | Manual trigger | `Actions → Build RaycastBridge → Run workflow` — useful for testing the pipeline itself |
 

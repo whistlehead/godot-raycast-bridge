@@ -9,15 +9,16 @@ namespace godot {
 
 /// Exposes allocation-reduced raycasting to C# via two methods:
 ///
-///   intersect_ray_packed  — returns a new PackedFloat32Array per call (one allocation).
-///   intersect_ray_into    — writes into a caller-supplied PackedFloat32Array (zero C#
-///                           allocations per call; the buffer is owned and reused by the caller).
+///   intersect_ray_packed   — returns a new PackedFloat32Array per call (one allocation).
+///   intersect_rays_batch   — casts N rays in one call; returns a single PackedFloat32Array
+///                            (one allocation regardless of ray count, one GDExtension dispatch).
 ///
-/// Result buffer layout (both methods, 8 floats):
+/// Result buffer layout (both methods, 9 floats):
 ///   [0]   hit flag  (1.0 = hit, 0.0 = miss)
 ///   [1-3] position  (x, y, z) — world space, metres
 ///   [4-6] normal    (x, y, z) — world space, unit vector
-///   [7]   collider instance ID cast to float (precision sufficient for ID ranges in practice)
+///   [7]   collider instance ID — low  32 bits, raw float reinterpret (no value conversion)
+///   [8]   collider instance ID — high 32 bits, raw float reinterpret (no value conversion)
 ///
 /// Register as an autoload singleton in project.godot so C# can reach it via
 /// GetNode<GodotObject>("/root/RaycastBridgeNative").
@@ -40,7 +41,7 @@ namespace godot {
 /// array, we prevent that managed wrapper from ever being created. The C++ Dictionary
 /// is freed immediately when it goes out of scope at the end of fill_result().
 /// The PackedFloat32Array that crosses the boundary carries no finalizer overhead
-/// and, in intersect_ray_into mode, is reused rather than reallocated each call.
+/// and, in intersect_rays_batch mode, is a single allocation regardless of ray count.
 class RaycastBridgeNative : public Object {
     GDCLASS(RaycastBridgeNative, Object)
 
@@ -50,7 +51,7 @@ protected:
 public:
     /// Cast a ray and return results as a newly allocated PackedFloat32Array.
     /// One PackedFloat32Array is allocated per call as the return value.
-    /// Prefer intersect_ray_into on the hot path.
+    /// Prefer intersect_rays_batch on the hot path.
     PackedFloat32Array intersect_ray_packed(
         PhysicsDirectSpaceState3D* space,
         Vector3                    from,
@@ -68,10 +69,11 @@ public:
     ///   [i*7 + 6]     max_dist   scalar — length of the ray
     ///
     /// Return buffer layout (8 floats per ray, stride 8):
-    ///   [i*8 + 0]     hit flag   (1.0 = hit, 0.0 = miss)
-    ///   [i*8 + 1..3]  position   (x, y, z) — world space
-    ///   [i*8 + 4..6]  normal     (x, y, z) — world space, unit vector
-    ///   [i*8 + 7]     collider instance ID cast to float
+    ///   [i*9 + 0]     hit flag   (1.0 = hit, 0.0 = miss)
+    ///   [i*9 + 1..3]  position   (x, y, z) — world space
+    ///   [i*9 + 4..6]  normal     (x, y, z) — world space, unit vector
+    ///   [i*9 + 7]     collider instance ID — low  32 bits, raw float reinterpret
+    ///   [i*9 + 8]     collider instance ID — high 32 bits, raw float reinterpret
     ///
     /// collision_mask applies uniformly to all rays in the batch.
     PackedFloat32Array intersect_rays_batch(
@@ -81,8 +83,8 @@ public:
         uint32_t                   collision_mask);
 
 private:
-    /// Shared implementation. Writes 8 floats into dest[0..7].
-    /// dest must point to at least 8 writable floats.
+    /// Shared implementation. Writes 9 floats into dest[0..8].
+    /// dest must point to at least 9 writable floats.
     static void fill_result(
         float*                     dest,
         PhysicsDirectSpaceState3D* space,

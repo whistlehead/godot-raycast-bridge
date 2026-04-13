@@ -1,45 +1,42 @@
+using System;
 using Godot;
 
+namespace PhysicsQueryBridge;
+
 /// <summary>
-/// Typed C# wrapper around the RaycastBridge GDExtension.
+/// Typed C# wrapper around the RaycastBridgeNative GDExtension.
 ///
-/// Register this script as an autoload singleton in Project Settings → Autoload
-/// (name it "RaycastBridge"). Access it from any node with:
-///   var bridge = GetNode&lt;RaycastBridge&gt;("/root/RaycastBridge");
-///
-/// The caller is responsible for allocating and reusing the input and output
-/// buffers. This wrapper provides typed dispatch and result reading only.
+/// No autoload or scene tree setup required. The native instance is created
+/// on the first call and reused for the lifetime of the application.
 ///
 /// Buffer layouts — see README.md for full documentation.
 /// </summary>
-public partial class RaycastBridge : GodotObject
+public static class RaycastBridge
 {
-    private GodotObject _native;
+    private static GodotObject _native;
+    private static GodotObject Native =>
+        _native ??= ClassDB.Instantiate("RaycastBridgeNative").AsGodotObject();
 
-    public override void _Ready()
-    {
-        // The native GDExtension class shares the same name. Retrieve it by
-        // finding the node registered under this autoload path, which Godot
-        // will have instantiated from the extension.
-        _native = (GodotObject)ClassDB.Instantiate("RaycastBridgeNative");
-    }
+    // Cached to avoid a StringName allocation on every Call() invocation.
+    private static readonly StringName MethodIntersectRayPacked  = "intersect_ray_packed";
+    private static readonly StringName MethodIntersectRaysBatch  = "intersect_rays_batch";
 
     // -------------------------------------------------------------------------
     // Single ray
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Casts a single ray. Returns a PackedFloat32Array of 8 floats.
+    /// Casts a single ray. Returns a PackedFloat32Array of 9 floats.
     /// One managed allocation per call. Use for low-frequency raycasts.
     /// </summary>
-    public PackedFloat32Array IntersectRay(
+    public static PackedFloat32Array IntersectRay(
         PhysicsDirectSpaceState3D space,
         Vector3 from,
         Vector3 to,
         uint collisionMask)
     {
-        return (PackedFloat32Array)_native.Call(
-            "intersect_ray_packed", space, from, to, collisionMask);
+        return (PackedFloat32Array)Native.Call(
+            MethodIntersectRayPacked, space, from, to, collisionMask);
     }
 
     // -------------------------------------------------------------------------
@@ -48,20 +45,20 @@ public partial class RaycastBridge : GodotObject
 
     /// <summary>
     /// Casts rayCount rays in a single call.
-    /// Returns a PackedFloat32Array of rayCount * 8 floats.
+    /// Returns a PackedFloat32Array of rayCount * 9 floats.
     ///
     /// inBuffer must be pre-allocated to rayCount * 7 floats by the caller.
     /// Use PackRay to fill it before calling this method.
     /// One managed allocation per call regardless of ray count.
     /// </summary>
-    public PackedFloat32Array IntersectRaysBatch(
+    public static PackedFloat32Array IntersectRaysBatch(
         PackedFloat32Array inBuffer,
         PhysicsDirectSpaceState3D space,
         int rayCount,
         uint collisionMask)
     {
-        return (PackedFloat32Array)_native.Call(
-            "intersect_rays_batch", inBuffer, space, rayCount, collisionMask);
+        return (PackedFloat32Array)Native.Call(
+            MethodIntersectRaysBatch, inBuffer, space, rayCount, collisionMask);
     }
 
     // -------------------------------------------------------------------------
@@ -90,7 +87,7 @@ public partial class RaycastBridge : GodotObject
     /// Returns true if the ray at the given index hit something.
     /// </summary>
     public static bool GetHit(PackedFloat32Array results, int index)
-        => results[index * 8] > 0.5f;
+        => results[index * 9] > 0.5f;
 
     /// <summary>
     /// Returns the hit position for the ray at the given index.
@@ -98,7 +95,7 @@ public partial class RaycastBridge : GodotObject
     /// </summary>
     public static Vector3 GetPosition(PackedFloat32Array results, int index)
     {
-        int o = index * 8;
+        int o = index * 9;
         return new Vector3(results[o + 1], results[o + 2], results[o + 3]);
     }
 
@@ -108,13 +105,19 @@ public partial class RaycastBridge : GodotObject
     /// </summary>
     public static Vector3 GetNormal(PackedFloat32Array results, int index)
     {
-        int o = index * 8;
+        int o = index * 9;
         return new Vector3(results[o + 4], results[o + 5], results[o + 6]);
     }
 
     /// <summary>
-    /// Returns the collider instance ID for the ray at the given index, or 0 if no hit.
+    /// Returns the full 64-bit collider instance ID for the ray at the given index, or 0 if no hit.
+    /// The ID is stored as two raw-bit-reinterpreted float32 slots — no precision loss.
     /// </summary>
     public static ulong GetColliderId(PackedFloat32Array results, int index)
-        => (ulong)results[index * 8 + 7];
+    {
+        int o = index * 9 + 7;
+        uint lo = BitConverter.SingleToUInt32Bits(results[o]);
+        uint hi = BitConverter.SingleToUInt32Bits(results[o + 1]);
+        return ((ulong)hi << 32) | lo;
+    }
 }
