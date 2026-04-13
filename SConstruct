@@ -32,6 +32,10 @@ if not os.path.isdir(godot_cpp_path):
 
 env = SConscript("{}/SConstruct".format(godot_cpp_path))
 
+# SCons on macOS prefixes shared libraries with "lib" by default.
+# Suppress it so output matches the names expected by RaycastBridge.gdextension.
+env["SHLIBPREFIX"] = ""
+
 env.Append(CPPPATH=["src/"])
 
 sources = Glob("src/*.cpp")
