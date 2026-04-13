@@ -89,40 +89,26 @@ YourGodotProject/
 The `bin/` folder is not committed to this repository. Releases are the distribution
 mechanism; build from source if you need binaries outside of a tagged release.
 
-**2. Add the autoload singleton**
+**2. Use from C#**
 
-In Godot: `Project → Project Settings → Autoload`  
-Add a new entry pointing to `RaycastBridge.cs` (included in this repository) with the
-name `RaycastBridge`. Godot will instantiate it at startup and make it accessible from
-any node as:
-
-```csharp
-var bridge = GetNode<RaycastBridge>("/root/RaycastBridge");
-```
+`RaycastBridge` is a static class — no autoload or scene tree setup required. Drop
+`RaycastBridge.cs` into your project and call it directly.
 
 > The GDExtension native class is registered internally as `RaycastBridgeNative` to avoid
-> a name collision with the C# autoload. You do not need to interact with it directly.
-
-**3. Use from C#**
+> a name collision with the C# wrapper. You do not need to interact with it directly.
 
 #### `IntersectRay` — single ray
 
 ```csharp
 using Godot;
+using PhysicsQueryBridge;
 
 public partial class MyNode : Node
 {
-    private RaycastBridge _bridge;
-
-    public override void _Ready()
-    {
-        _bridge = GetNode<RaycastBridge>("/root/RaycastBridge");
-    }
-
     private void CastRay(Vector3 from, Vector3 to, uint collisionMask)
     {
         var spaceState = GetWorld3D().DirectSpaceState;
-        var result = _bridge.IntersectRay(spaceState, from, to, collisionMask);
+        var result = RaycastBridge.IntersectRay(spaceState, from, to, collisionMask);
 
         bool    hit      = RaycastBridge.GetHit(result, 0);
         Vector3 position = RaycastBridge.GetPosition(result, 0);
@@ -135,18 +121,17 @@ public partial class MyNode : Node
 
 ```csharp
 using Godot;
+using PhysicsQueryBridge;
 
 public partial class RaycastOrchestrator : Node
 {
     private const int RayCount = 12; // e.g. 3 rays × 4 wheels
 
     private readonly PackedFloat32Array _batchIn = new PackedFloat32Array();
-    private RaycastBridge _bridge;
 
     public override void _Ready()
     {
         _batchIn.Resize(RayCount * 7);
-        _bridge = GetNode<RaycastBridge>("/root/RaycastBridge");
     }
 
     private void DispatchAndRead(PhysicsDirectSpaceState3D spaceState, uint collisionMask)
@@ -156,7 +141,7 @@ public partial class RaycastOrchestrator : Node
             RaycastBridge.PackRay(_batchIn, i, origin, direction, maxDist);
 
         // Single GDExtension call for all rays:
-        var results = _bridge.IntersectRaysBatch(_batchIn, spaceState, RayCount, collisionMask);
+        var results = RaycastBridge.IntersectRaysBatch(_batchIn, spaceState, RayCount, collisionMask);
 
         // Read results by ray index:
         for (int i = 0; i < RayCount; i++)
@@ -307,7 +292,7 @@ ready-to-use binaries without any local toolchain setup.
 | `windows-arm64` | `windows-latest` | `.windows.template_debug.arm64.dll` + release (MSVC cross-compiler) |
 | `macos` | `macos-latest` | Both slices (x86-64 + arm64) merged into `.universal.dylib` via `lipo` |
 
-A final `collect` job gathers all three artifacts into a single `RaycastBridge-all` zip.
+The release job produces one zip per Godot version (e.g. `RaycastBridge-v1.0.0-godot4.3.zip`), each containing the binaries for all platforms built against that version.
 
 ### Releasing a new version
 

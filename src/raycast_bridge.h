@@ -68,7 +68,7 @@ public:
     ///                             ray endpoint = origin + direction * max_dist
     ///   [i*7 + 6]     max_dist   scalar — length of the ray
     ///
-    /// Return buffer layout (8 floats per ray, stride 8):
+    /// Return buffer layout (9 floats per ray, stride 9):
     ///   [i*9 + 0]     hit flag   (1.0 = hit, 0.0 = miss)
     ///   [i*9 + 1..3]  position   (x, y, z) — world space
     ///   [i*9 + 4..6]  normal     (x, y, z) — world space, unit vector
