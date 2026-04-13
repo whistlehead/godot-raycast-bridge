@@ -53,7 +53,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: bin-${{ matrix.godot_version }}-windows-x86_64
-          path: bin/RaycastBridge.windows.*x86_64*
+          path: bin/RaycastBridge.windows.*x86_64*.dll
 
   # ── Windows ARM64 ───────────────────────────────────────────────────────────
   build-windows-arm64:
@@ -96,7 +96,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: bin-${{ matrix.godot_version }}-windows-arm64
-          path: bin/RaycastBridge.windows.*arm64*
+          path: bin/RaycastBridge.windows.*arm64*.dll
 
   # ── macOS Universal ─────────────────────────────────────────────────────────
   build-macos:
