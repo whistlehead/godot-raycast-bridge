@@ -1,0 +1,214 @@
+name: Build RaycastBridge
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  # ── Windows x86-64 ──────────────────────────────────────────────────────────
+  build-windows-x86_64:
+    name: Windows x86-64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache godot-cpp
+        uses: actions/cache@v4
+        id: cache-godotcpp
+        with:
+          path: godot-cpp/${{ env.GODOT_VERSION }}
+          key: godotcpp-${{ env.GODOT_VERSION }}-windows-x86_64
+
+      - name: Clone godot-cpp
+        if: steps.cache-godotcpp.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/godotengine/godot-cpp `
+            --branch ${{ env.GODOT_VERSION }} `
+            --depth 1 `
+            --recurse-submodules `
+            godot-cpp/${{ env.GODOT_VERSION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - run: pip install scons
+
+      - name: Build (debug)
+        run: |
+          scons target=template_debug platform=windows arch=x86_64 `
+            godot_version=${{ env.GODOT_VERSION }}
+
+      - name: Build (release)
+        run: |
+          scons target=template_release platform=windows arch=x86_64 `
+            godot_version=${{ env.GODOT_VERSION }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-windows-x86_64
+          path: bin/RaycastBridge.windows.*x86_64*
+
+  # ── Windows ARM64 ───────────────────────────────────────────────────────────
+  # MSVC ships an ARM64 cross-compiler on standard windows-latest runners.
+  build-windows-arm64:
+    name: Windows ARM64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache godot-cpp
+        uses: actions/cache@v4
+        id: cache-godotcpp
+        with:
+          path: godot-cpp/${{ env.GODOT_VERSION }}
+          key: godotcpp-${{ env.GODOT_VERSION }}-windows-arm64
+
+      - name: Clone godot-cpp
+        if: steps.cache-godotcpp.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/godotengine/godot-cpp `
+            --branch ${{ env.GODOT_VERSION }} `
+            --depth 1 `
+            --recurse-submodules `
+            godot-cpp/${{ env.GODOT_VERSION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - run: pip install scons
+
+      - name: Build (debug)
+        run: |
+          scons target=template_debug platform=windows arch=arm64 `
+            godot_version=${{ env.GODOT_VERSION }}
+
+      - name: Build (release)
+        run: |
+          scons target=template_release platform=windows arch=arm64 `
+            godot_version=${{ env.GODOT_VERSION }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-windows-arm64
+          path: bin/RaycastBridge.windows.*arm64*
+
+  # ── macOS Universal (x86-64 + arm64 fat binary) ─────────────────────────────
+  build-macos:
+    name: macOS Universal
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache godot-cpp
+        uses: actions/cache@v4
+        id: cache-godotcpp
+        with:
+          path: godot-cpp/${{ env.GODOT_VERSION }}
+          key: godotcpp-${{ env.GODOT_VERSION }}-macos
+
+      - name: Clone godot-cpp
+        if: steps.cache-godotcpp.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/godotengine/godot-cpp \
+            --branch ${{ env.GODOT_VERSION }} \
+            --depth 1 \
+            --recurse-submodules \
+            godot-cpp/${{ env.GODOT_VERSION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - run: pip install scons
+
+      - name: Build x86-64 (debug)
+        run: |
+          scons target=template_debug platform=macos arch=x86_64 \
+            godot_version=${{ env.GODOT_VERSION }}
+
+      - name: Build x86-64 (release)
+        run: |
+          scons target=template_release platform=macos arch=x86_64 \
+            godot_version=${{ env.GODOT_VERSION }}
+
+      - name: Build arm64 (debug)
+        run: |
+          scons target=template_debug platform=macos arch=arm64 \
+            godot_version=${{ env.GODOT_VERSION }}
+
+      - name: Build arm64 (release)
+        run: |
+          scons target=template_release platform=macos arch=arm64 \
+            godot_version=${{ env.GODOT_VERSION }}
+
+      - name: Lipo — merge into universal binaries
+        run: |
+          mkdir -p bin
+          for target in template_debug template_release; do
+            lipo -create \
+              bin/RaycastBridge.macos.${target}.x86_64.dylib \
+              bin/RaycastBridge.macos.${target}.arm64.dylib \
+              -output bin/RaycastBridge.macos.${target}.universal.dylib
+          done
+
+      - name: Ad-hoc sign dylibs (satisfies Gatekeeper without a paid certificate)
+        run: |
+          for f in bin/RaycastBridge.macos.*.dylib; do
+            codesign --force --sign - "$f"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-macos
+          path: bin/RaycastBridge.macos.*
+
+  # ── Collect all binaries into one artifact (for CI runs) ───────────────────
+  collect:
+    name: Collect binaries
+    needs: [build-windows-x86_64, build-windows-arm64, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          merge-multiple: true
+          path: bin/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RaycastBridge-all
+          path: bin/
+
+  # ── Publish a GitHub Release when a version tag is pushed ───────────────────
+  release:
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows-x86_64, build-windows-arm64, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          merge-multiple: true
+          path: bin/
+
+      - name: Zip release
+        run: zip -r RaycastBridge-${{ github.ref_name }}.zip bin/ RaycastBridge.gdextension
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: RaycastBridge-${{ github.ref_name }}.zip
+          generate_release_notes: true

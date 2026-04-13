@@ -1,0 +1,16 @@
+# godot-cpp clones (fetched by setup.py, not tracked in this repo)
+godot-cpp/
+
+# SCons build intermediates
+*.o
+*.obj
+.sconsign.dblite
+*.pyc
+__pycache__/
+
+# Compiled output — distributed via GitHub Releases, not committed
+bin/
+
+# OS noise
+.DS_Store
+Thumbs.db

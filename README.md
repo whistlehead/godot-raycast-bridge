@@ -21,8 +21,8 @@ the .NET GC pressure caused by `PhysicsDirectSpaceState3D.IntersectRay` at high 
 
 Calling `IntersectRay` from C# causes the Mono glue layer to wrap the native result in a
 `Godot.Collections.Dictionary` — a finalizable managed object — on every call. At high
-call rates, this generates
-thousands of finalizable objects per second and measurable GC pressure.
+call rates, this generates thousands of finalizable objects per second and measurable GC
+pressure.
 
 This extension intercepts the result in C++ before it crosses the managed/unmanaged
 boundary, extracts the values into a flat `PackedFloat32Array`, and returns that to C#
@@ -50,76 +50,199 @@ the buffer is pre-allocated. Use this on the hot path.
 | `[4–6]` | Normal (x, y, z) — world space, unit vector |
 | `[7]` | Collider instance ID (cast to float) |
 
-## Building
+---
+
+## Using pre-built binaries
+
+Pre-built binaries for Windows (x86-64, ARM64) and macOS (Universal) are attached to each
+[GitHub Release](../../releases). Download the zip from the latest release and extract it —
+you'll get a `bin/` folder and `RaycastBridge.gdextension`. Copy both into your Godot
+project root.
+
+The `bin/` folder is not committed to this repository. Releases are the distribution
+mechanism; build from source if you need binaries outside of a tagged release.
+
+See [Project setup](#project-setup) below for how to wire it up in Godot.
+
+### Platform limitations
+
+#### macOS
+
+The binaries in releases are **ad-hoc signed** (using `-` as the identity, a zero-cost
+placeholder). This is sufficient for:
+- Running in the Godot editor on your own Mac
+- Distribution to other developers who will run it themselves
+
+It is **not sufficient** for:
+- Submitting to the **Mac App Store** — requires a paid Apple Developer account, a
+  distribution certificate, and App Store provisioning. The `.dylib` must be signed with
+  your distribution identity and the app submitted through Xcode or `altool`.
+- **Notarised distribution** outside the App Store (e.g. a `.dmg` or `.zip` you host
+  yourself) — Apple requires notarisation for software distributed to users on macOS 10.15+
+  who have Gatekeeper enabled. This needs a paid Developer ID certificate, signing with
+  `codesign --deep --options runtime`, and submission to Apple's notary service via
+  `notarytool`. Without it, users will see "Apple cannot check it for malicious software"
+  and may be blocked from opening the app.
+
+If you are publishing a game that embeds this extension, you will need to re-sign the
+`.dylib` with your own Apple Developer credentials as part of your Godot export pipeline.
+Godot's export documentation covers this for GDExtensions.
+
+#### Windows
+
+Fewer restrictions apply:
+- The binaries are **unsigned**. Windows SmartScreen may show a warning the first time a
+  user runs an app that contains them, particularly if the app itself is also unsigned.
+  For most development and internal use this is not an issue.
+- For **commercial distribution via Steam, Epic, or direct download**, signing with a
+  code-signing certificate (EV or OV, from a CA like DigiCert or Sectigo) removes the
+  SmartScreen warning and is expected by users. This is done at the Godot export stage,
+  not at the GDExtension level — you sign the final `.exe`, not the `.dll` individually.
+- The **Microsoft Store** (MSIX packaging) requires the package to be signed, but again
+  this is handled at the app level by Godot's export pipeline.
+
+---
+
+## Building from source
+
+### Repository layout
+
+```
+RaycastBridge/
+├── godot-cpp/              # gitignored — created by setup.py
+│   └── 4.3/                # one sub-folder per Godot version
+├── build/                  # gitignored — SCons intermediates
+│   └── windows-x86_64/
+├── bin/                    # compiled output (.dll / .dylib)
+├── src/                    # C++ source
+├── SConstruct
+├── setup.py                # clones godot-cpp at the right version
+└── RaycastBridge.gdextension
+```
+
+`godot-cpp` is never committed. `setup.py` clones it on demand. Multiple Godot versions
+can coexist under `godot-cpp/` without interfering with each other.
 
 ### Prerequisites
 
-- [SCons](https://scons.org/) — `pip install scons`
+- Python 3 and [SCons](https://scons.org/): `pip install scons`
 - A C++17-capable compiler:
-  - **Windows:** Visual Studio 2019 or later (MSVC), or MinGW-w64
-  - **Linux:** GCC or Clang
-- The `godot-cpp` bindings, cloned as a subdirectory of this folder (see step 1 below)
+  - **Windows:** Visual Studio 2019+ (MSVC) — open a Developer Command Prompt so `cl.exe` is on PATH, or pass `use_mingw=yes` for MinGW-w64
+  - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
+  - **Linux:** GCC or Clang (`sudo apt install build-essential scons`)
 
 ### Steps
 
-**1. Clone godot-cpp**
-
-Clone the Godot C++ bindings into this folder. The branch must match your Godot version.
+**1. Clone this repo**
 
 ```bash
-cd GDExtension/RaycastBridge
-git clone https://github.com/godotengine/godot-cpp --branch 4.3 godot-cpp
+git clone <this-repo-url>
+cd RaycastBridge
 ```
 
-Check your Godot version in the editor (`Help → About Godot`) and use the matching branch:
-`4.1`, `4.2`, `4.3`, `4.4`, etc. The branch name is just the minor version — no patch number.
-
-**2. Build**
-
-From inside `GDExtension/RaycastBridge/`:
+**2. Fetch godot-cpp**
 
 ```bash
-# Debug build (default)
+python setup.py                      # clones for Godot 4.3 (default)
+python setup.py --godot-version 4.4  # or a different version
+python setup.py --list               # show what's already cloned
+```
+
+This clones `https://github.com/godotengine/godot-cpp` into `godot-cpp/4.3/`. Match the
+version to the Godot editor you are targeting (`Help → About Godot` shows the version).
+
+**3. Build**
+
+```bash
+# Debug build for the host platform (default)
 scons
 
 # Release build
 scons target=template_release
+
+# Different Godot version
+scons godot_version=4.4
+
+# Explicit platform / architecture (usually not needed — SCons detects the host)
+scons platform=windows arch=x86_64 target=template_release
+scons platform=macos arch=arm64 target=template_release
 ```
 
-SCons will compile `godot-cpp` on the first run (slow — a few minutes). Subsequent builds
-are incremental and fast.
+SCons compiles `godot-cpp` on the first run (a few minutes). Subsequent builds are
+incremental. Output lands in `bin/` with names like:
 
-The output `.dll` (Windows) or `.so` (Linux) is written directly to your Godot project's
-`bin/` directory as configured in `SConstruct`.
+```
+bin/RaycastBridge.windows.template_release.x86_64.dll
+bin/RaycastBridge.macos.template_release.arm64.dylib
+```
 
-**3. Verify**
+**4. Verify**
 
-Open the Godot editor. If the extension loaded correctly, `RaycastBridge` will appear as an
-available class in the editor's class reference. If not, check the Godot output panel for
-extension load errors.
+Open the Godot editor. If the extension loaded, `RaycastBridge` will appear in the class
+reference. If not, check the Godot output panel for extension load errors.
 
-### Compiler notes — Windows
+---
 
-If you are using MSVC (recommended on Windows):
+## CI / automated builds (GitHub Actions)
 
-- Open a **Developer Command Prompt** (or run `vcvars64.bat`) before running SCons, so
-  that `cl.exe` is on your PATH.
-- Alternatively, install the `mingw` SCons tool and pass `use_mingw=yes`.
+The workflow at `.github/workflows/build.yml` runs automatically and produces
+ready-to-use binaries without any local toolchain setup.
 
-If SCons cannot find your compiler it will print `No C++ compiler found` and exit.
+### What triggers a build
 
-### Compiler notes — Linux
+| Event | What happens |
+|---|---|
+| Push to `main` | Builds all platforms; binaries attached to the workflow run as artifacts (available for 90 days, useful for testing) |
+| Pull request to `main` | Same — lets you verify a PR builds cleanly before merging |
+| Push a version tag (`v*`) | Builds all platforms **and** creates a GitHub Release with all binaries attached as downloadable assets |
+| Manual trigger | `Actions → Build RaycastBridge → Run workflow` — useful for testing the pipeline itself |
 
-GCC and Clang both work. Install via your package manager:
+### Platforms built
+
+| Job | Runner | Output |
+|---|---|---|
+| `windows-x86_64` | `windows-latest` | `.windows.template_debug.x86_64.dll` + release variant |
+| `windows-arm64` | `windows-latest` | `.windows.template_debug.arm64.dll` + release (MSVC cross-compiler) |
+| `macos` | `macos-latest` | Both slices (x86-64 + arm64) merged into `.universal.dylib` via `lipo` |
+
+A final `collect` job gathers all three artifacts into a single `RaycastBridge-all` zip.
+
+### Releasing a new version
 
 ```bash
-# Debian/Ubuntu
-sudo apt install build-essential scons
+git tag v1.0.0
+git push origin v1.0.0
 ```
+
+GitHub Actions will build all platforms and publish a Release at
+`https://github.com/<you>/<repo>/releases/tag/v1.0.0` with the binaries attached. No
+manual upload needed.
+
+### godot-cpp caching
+
+godot-cpp is cached between runs (keyed by version + platform). The first build for a
+given version clones and compiles it; subsequent pushes reuse the cache and are much
+faster.
+
+---
 
 ## Project setup
 
-**1. Add the autoload singleton**
+**1. Copy files into your Godot project**
+
+Download the zip from the [latest Release](../../releases/latest) and extract it directly
+into your Godot project root. The layout should look like this:
+
+```
+YourGodotProject/
+├── bin/
+│   ├── RaycastBridge.windows.template_release.x86_64.dll
+│   ├── RaycastBridge.windows.template_release.arm64.dll
+│   └── RaycastBridge.macos.template_release.universal.dylib
+└── RaycastBridge.gdextension
+```
+
+**2. Add the autoload singleton**
 
 In Godot: `Project → Project Settings → Autoload`  
 Add a new entry pointing to a scene or script that instantiates a `RaycastBridge` node.
@@ -132,10 +255,10 @@ name `RaycastBridge`. It will then be accessible from C# as:
 GetNode<GodotObject>("/root/RaycastBridge")
 ```
 
-**2. Use from C#**
+**3. Use from C#**
 
 ```csharp
-// Pre-allocate (once, e.g. in _Ready):
+// Pre-allocate once (e.g. in _Ready):
 var buffer = new PackedFloat32Array();
 buffer.Resize(8);
 var raycastBridge = GetNode<GodotObject>("/root/RaycastBridge");
@@ -148,8 +271,7 @@ var  position = new Vector3(buffer[1], buffer[2], buffer[3]);
 var  normal   = new Vector3(buffer[4], buffer[5], buffer[6]);
 ```
 
-Or use the `SuspensionRaycaster` / `IGroundQuery` wrapper from the MoVeSim project, which
-handles the buffer lifecycle and unpacking.
+---
 
 ## Godot version compatibility
 
