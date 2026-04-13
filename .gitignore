@@ -11,6 +11,9 @@ __pycache__/
 # Compiled output — distributed via GitHub Releases, not committed
 bin/
 
+# Claude Code memory
+.claude/
+
 # OS noise
 .DS_Store
 Thumbs.db

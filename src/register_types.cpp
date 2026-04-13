@@ -29,7 +29,7 @@ GDExtensionBool GDE_EXPORT raycast_bridge_init(
 
     init_obj.register_initializer(initialize_raycast_bridge);
     init_obj.register_terminator(uninitialize_raycast_bridge);
-    init_obj.set_minimum_initialization_level(MODULE_INITIALIZATION_LEVEL_SCENE);
+    init_obj.set_minimum_library_initialization_level(MODULE_INITIALIZATION_LEVEL_SCENE);
 
     return init_obj.init();
 }

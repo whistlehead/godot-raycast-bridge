@@ -275,5 +275,21 @@ var  normal   = new Vector3(buffer[4], buffer[5], buffer[6]);
 
 ## Godot version compatibility
 
-Tested against Godot 4.3. Should work on any 4.x version with a matching `godot-cpp`
-branch. The extension uses no version-specific APIs beyond `PhysicsDirectSpaceState3D`.
+Release zips are built against **Godot 4.3, 4.4, and 4.5**. Minimum supported version is
+4.3. Each zip is compiled against the matching `godot-cpp` branch and is not
+interchangeable — use the zip that matches your editor version.
+
+The 4.5 binary is confirmed to also load correctly in Godot 4.6.x, as the GDExtension ABI
+did not change between those releases. This is not guaranteed to hold for all future
+versions.
+
+The extension uses no version-specific APIs beyond `PhysicsDirectSpaceState3D`, so it
+should continue to work on future 4.x releases. When a new `godot-cpp` stable branch
+appears, adding support is a one-line change to the matrix in
+`.github/workflows/build.yml`.
+
+**Adding a new Godot version to the build matrix:**
+1. Verify the branch exists at [github.com/godotengine/godot-cpp/branches](https://github.com/godotengine/godot-cpp/branches)
+2. Add the version string to the three `matrix.godot_version` lists in `.github/workflows/build.yml`
+3. Note: if godot-cpp adopts a new branch naming convention (e.g. `godot-4.6-stable`
+   instead of `4.6`), update both the matrix value and the `--branch` flag in the clone step
