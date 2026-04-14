@@ -132,11 +132,11 @@ public partial class RaycastOrchestrator : Node
 {
     private const int RayCount = 12; // e.g. 3 rays × 4 wheels
 
-    private readonly PackedFloat32Array _batchIn = new PackedFloat32Array();
+    private float[] _batchIn;
 
     public override void _Ready()
     {
-        _batchIn.Resize(RayCount * 7);
+        _batchIn = new float[RayCount * 7];
     }
 
     private void DispatchAndRead(PhysicsDirectSpaceState3D spaceState, uint collisionMask)

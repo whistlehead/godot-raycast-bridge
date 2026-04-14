@@ -4,7 +4,7 @@ using PhysicsQueryBridge;
 /// <summary>
 /// Attach to a Node3D in your scene. Press Space to fire a ray straight down.
 /// </summary>
-public partial class RaycastTest : Node3D
+public partial class RaycastExample : Node3D
 {
     [Export] public float RayLength = 100f;
 

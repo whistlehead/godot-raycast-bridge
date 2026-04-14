@@ -26,16 +26,16 @@ public static class RaycastBridge
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Casts a single ray. Returns a PackedFloat32Array of 9 floats.
+    /// Casts a single ray. Returns a float[] of 9 floats.
     /// One managed allocation per call. Use for low-frequency raycasts.
     /// </summary>
-    public static PackedFloat32Array IntersectRay(
+    public static float[] IntersectRay(
         PhysicsDirectSpaceState3D space,
         Vector3 from,
         Vector3 to,
         uint collisionMask)
     {
-        return (PackedFloat32Array)Native.Call(
+        return (float[])Native.Call(
             _methodIntersectRayPacked, space, from, to, collisionMask);
     }
 
@@ -45,19 +45,19 @@ public static class RaycastBridge
 
     /// <summary>
     /// Casts rayCount rays in a single call.
-    /// Returns a PackedFloat32Array of rayCount * 9 floats.
+    /// Returns a float[] of rayCount * 9 floats.
     ///
     /// inBuffer must be pre-allocated to rayCount * 7 floats by the caller.
     /// Use PackRay to fill it before calling this method.
     /// One managed allocation per call regardless of ray count.
     /// </summary>
-    public static PackedFloat32Array IntersectRaysBatch(
-        PackedFloat32Array inBuffer,
+    public static float[] IntersectRaysBatch(
+        float[] inBuffer,
         PhysicsDirectSpaceState3D space,
         int rayCount,
         uint collisionMask)
     {
-        return (PackedFloat32Array)Native.Call(
+        return (float[])Native.Call(
             _methodIntersectRaysBatch, inBuffer, space, rayCount, collisionMask);
     }
 
@@ -71,7 +71,7 @@ public static class RaycastBridge
     /// direction need not be normalised; the ray endpoint is origin + direction * maxDist.
     /// </summary>
     public static void PackRay(
-        PackedFloat32Array inBuffer,
+        float[] inBuffer,
         int index,
         Vector3 origin,
         Vector3 direction,
@@ -86,14 +86,14 @@ public static class RaycastBridge
     /// <summary>
     /// Returns true if the ray at the given index hit something.
     /// </summary>
-    public static bool GetHit(PackedFloat32Array results, int index)
+    public static bool GetHit(float[] results, int index)
         => results[index * 9] > 0.5f;
 
     /// <summary>
     /// Returns the hit position for the ray at the given index.
     /// Check GetHit first — position is zero if there was no hit.
     /// </summary>
-    public static Vector3 GetPosition(PackedFloat32Array results, int index)
+    public static Vector3 GetPosition(float[] results, int index)
     {
         int o = index * 9;
         return new Vector3(results[o + 1], results[o + 2], results[o + 3]);
@@ -103,7 +103,7 @@ public static class RaycastBridge
     /// Returns the hit normal for the ray at the given index.
     /// Check GetHit first — normal is zero if there was no hit.
     /// </summary>
-    public static Vector3 GetNormal(PackedFloat32Array results, int index)
+    public static Vector3 GetNormal(float[] results, int index)
     {
         int o = index * 9;
         return new Vector3(results[o + 4], results[o + 5], results[o + 6]);
@@ -113,7 +113,7 @@ public static class RaycastBridge
     /// Returns the full 64-bit collider instance ID for the ray at the given index, or 0 if no hit.
     /// The ID is stored as two raw-bit-reinterpreted float32 slots — no precision loss.
     /// </summary>
-    public static ulong GetColliderId(PackedFloat32Array results, int index)
+    public static ulong GetColliderId(float[] results, int index)
     {
         int o = index * 9 + 7;
         uint lo = BitConverter.SingleToUInt32Bits(results[o]);

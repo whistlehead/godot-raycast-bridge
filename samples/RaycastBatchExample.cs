@@ -5,18 +5,17 @@ using PhysicsQueryBridge;
 /// Attach to a Node3D in your scene. Press Space to fire a cone of 16 rays downward,
 /// each angled 30 degrees from vertical, evenly spaced around the circle.
 /// </summary>
-public partial class RaycastConeTest : Node3D
+public partial class RaycastBatchExample : Node3D
 {
     [Export] public float RayLength   = 100f;
     [Export] public float ConeAngleDeg = 30f;
     [Export] public int   RayCount    = 16;
 
-    private PackedFloat32Array _inBuffer;
+    private float[] _inBuffer;
 
     public override void _Ready()
     {
-        _inBuffer = new PackedFloat32Array();
-        _inBuffer.Resize(RayCount * 7);
+        _inBuffer = new float[RayCount * 7];
     }
 
     public override void _Input(InputEvent @event)
