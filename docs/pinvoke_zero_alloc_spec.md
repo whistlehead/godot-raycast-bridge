@@ -3,7 +3,7 @@
 ## Status
 
 Not implemented. Retained as a design reference in case GC pressure from the current
-batch API becomes measurable. Based on benchmark data, Mode F (batch 200) produces
+batch API becomes measurable. Based on benchmark data, Mode G (batch 200) produces
 ~2 gen0 collections per 600 ticks with ~4.6 MB allocated — approximately one gen0
 collection every 5 seconds. This is well below the threshold for perceptible frame
 pacing issues.

@@ -52,71 +52,11 @@ with 12+ raycasts per wheel, this means thousands of finalizable objects queued 
 
 The Jolt backend (`modules/jolt_physics/spaces/jolt_physics_direct_space_state_3d.cpp`)
 fills a native `RayResult` struct with no allocation. The Dictionary is created solely by
-the Godot wrapper layer sitting above Jolt, not by Jolt itself. The minimum possible
-allocation for any GDExtension-accessible raycast is therefore: one `DictionaryPrivate`
-on the C++ heap per call.
+the Godot wrapper layer sitting above Jolt, not by Jolt itself.
 
----
-
-## Solution: RaycastBridge GDExtension
-
-The RaycastBridge GDExtension (`godot-raycast-bridge`, separate repository) intercepts the
-result in C++ before it crosses the managed/unmanaged boundary:
-
-```cpp
-Dictionary hit = space->intersect_ray(params);  // C++ Dictionary, unmanaged heap
-// Extract values into a flat float array — Dictionary freed when it goes out of scope.
-// The managed Godot.Collections.Dictionary wrapper is never created.
-```
-
-The result is returned to C# as a `PackedFloat32Array`, which:
-- Carries no finalizer
-- In `intersect_ray_into` mode, is pre-allocated once and reused — eliminating the
-  per-call managed allocation entirely
-
-### Allocation accounting per raycast call
-
-| Allocation | Calling from C# directly | Via GDExtension `intersect_ray_into` |
-|---|---|---|
-| Jolt `RayResult` struct | Stack — none | Stack — none |
-| `DictionaryPrivate` + `HashMap` (C++ heap) | Yes | Yes — unavoidable |
-| `PhysicsRayQueryParameters3D` (C++ heap) | Yes | Yes |
-| `Godot.Collections.Dictionary` managed wrapper | **Yes — finalizable** | **No** |
-| Per-key `Variant` boxing in C# | **Yes — per key** | **No** |
-| `PackedFloat32Array` managed wrapper | No | No — reused |
-| `float[]` scratch array | No | No — reused |
-
-The two bold rows are the source of GC pressure. Both are eliminated by the GDExtension.
-
----
-
-## What would eliminate the remaining C++ allocations
-
-The `DictionaryPrivate` allocation cannot be removed from GDExtension. To go further:
-
-- **Fork Godot** and add a struct-return overload to `PhysicsDirectSpaceState3D` that
-  bypasses the Dictionary entirely.
-- **Call Jolt directly** from a GDExtension, managing your own physics world — enormous
-  undertaking, incompatible with using Godot's scene physics.
-
-Neither is warranted here. The C++ heap allocations do not cause .NET GC pressure.
-
-**Result buffer layout** (8 floats, both methods):
-
-| Index | Content |
-|---|---|
-| `[0]` | Hit flag: `1.0` = hit, `0.0` = miss |
-| `[1]` | Position X (world space, metres) |
-| `[2]` | Position Y |
-| `[3]` | Position Z |
-| `[4]` | Normal X (world space, unit vector) |
-| `[5]` | Normal Y |
-| `[6]` | Normal Z |
-| `[7]` | Collider instance ID (cast to float; valid for IDs up to ~16 million) |
-
-**`intersect_ray_packed(space, from, to, collision_mask) → PackedFloat32Array`**  
-Returns a freshly allocated array. One managed object allocated per call.
-
-**`intersect_ray_into(out_buffer, space, from, to, collision_mask) → void`**  
-Writes into `out_buffer`. Caller must pre-allocate to exactly 8 elements. Zero managed
-allocations on the C# side when used correctly.
+This means there is no smarter C++ approach available from a GDExtension — the
+`DictionaryPrivate` per call is irreducible without forking the engine. It also means the
+C++ heap cost is not the dominant remaining cost: benchmarking (see README) shows the
+output `float[]` copy across the `Call()` boundary accounts for ~93% of remaining
+allocations after the managed Dictionary is eliminated. That is a .NET/Variant boundary
+problem, addressed in `pinvoke_zero_alloc_spec.md`.
