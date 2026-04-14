@@ -73,17 +73,22 @@ not equal `ray_count × 7`, all results are returned as miss.
 **1. Get the binaries**
 
 Pre-built binaries for Windows (x86-64, ARM64) and macOS (Universal) are attached to each
-[GitHub Release](../../releases). Download the zip from the latest release and extract it
-directly into your Godot project root:
+[GitHub Release](../../releases). Download the zip for your Godot version and drag the
+`addons/` folder directly into your Godot project root. The layout after extraction:
 
 ```
 YourGodotProject/
-├── bin/
-│   ├── RaycastBridge.windows.template_release.x86_64.dll
-│   ├── RaycastBridge.windows.template_release.arm64.dll
-│   └── RaycastBridge.macos.template_release.universal.dylib
-├── RaycastBridge.gdextension
-└── RaycastBridge.cs
+└── addons/
+    └── RaycastBridge/
+        ├── RaycastBridge.gdextension
+        ├── RaycastBridge.cs
+        ├── bin/
+        │   ├── RaycastBridge.windows.template_release.x86_64.dll
+        │   ├── RaycastBridge.windows.template_release.arm64.dll
+        │   └── RaycastBridge.macos.template_release.universal.dylib
+        └── samples/
+            ├── RaycastExample.cs
+            └── RaycastBatchExample.cs
 ```
 
 The `bin/` folder is not committed to this repository. Releases are the distribution
@@ -204,6 +209,7 @@ RaycastBridge/
 │   └── 4.3/                # one sub-folder per Godot version
 ├── bin/                    # compiled output (.dll / .dylib)
 ├── src/                    # C++ source
+├── samples/                # C# usage examples
 ├── SConstruct
 ├── setup.py                # clones godot-cpp at the right version
 └── RaycastBridge.gdextension
@@ -292,7 +298,7 @@ ready-to-use binaries without any local toolchain setup.
 | `windows-arm64` | `windows-latest` | `.windows.template_debug.arm64.dll` + release (MSVC cross-compiler) |
 | `macos` | `macos-latest` | Both slices (x86-64 + arm64) merged into `.universal.dylib` via `lipo` |
 
-The release job produces one zip per Godot version (e.g. `RaycastBridge-v1.0.0-godot4.3.zip`), each containing the binaries for all platforms built against that version.
+The release job produces one zip per Godot version (e.g. `RaycastBridge-v1.0.0-godot4.3.zip`), each containing all platform binaries staged under `addons/RaycastBridge/` — drag the `addons/` folder into your project root to install.
 
 ### Releasing a new version
 
