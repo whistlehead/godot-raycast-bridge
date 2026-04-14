@@ -2,13 +2,27 @@
 
 ## Disclaimer
 
+Long story short: this library works really well at reducing - but not eliminating - Garbage
+Collector (GC) pressure if, and only if:
+- You are using a LOT of raycasts
+- You are able to batch your raycast queries together and dispatch them in one go
+
+In particular, it totally eliminates Gen2 GC collection in my testing setup
+(10,000 rays/second), thus eliminating a very real cause of microstutter. At high batch sizes,
+Gen1 GC collection were also eliminated. The *"Is it worth it?"* crossover lies at somewhere
+around 15 rays per batch - below that, you're probably better off using the native API. *This
+library is objectively worse than native at less than 10 rays per batch.* Only use it if your
+project meets the above criteria.
+
 This extension has been coded (or hallucinated, yet to be fully verified) by Claude Code
-(Sonnet 4.6) at my direction. I simply guided it to look into the Godot source code to see
-if there was any way around the horrendously inefficient method Godot uses to return the
-results of its raycasts. To be clear - the Godot implementation is easy to use and works
+(Sonnet 4.6) under heavy direction. I simply guided it to look into the Godot source code
+to see if there was any way around the horrendously inefficient method Godot uses to return
+the results of its raycasts. To be clear - the Godot implementation is easy to use and works
 great if you have a more typical number of raycasts per frame, a few dozen is hardly going
-to tickle the garbage collector. In my case though, I'm shooting 15 rays per wheel, 10 times
-per tick, 60 ticks per second, on a minimum of four wheels.
+to tickle the garbage collector, plus it has some under-the-hood optimisations which make it
+more efficient than it may first appear. In my case though, I'm shooting 15 rays per wheel,
+10 times per tick, 60 ticks per second, on a minimum of four wheels. GC allocations add up
+*fast*.
 
 From beyond this point, you are in Magical Claude-land. Good luck.
 
@@ -23,7 +37,7 @@ call rates this generates thousands of finalizable objects per second and measur
 pressure.
 
 This extension intercepts the result in C++ before it crosses the managed/unmanaged
-boundary, extracts the values into a flat `PackedFloat32Array`, and returns that to C#
+boundary, extracts the values into a flat `float[]`, and returns that to C#
 instead. The managed Dictionary wrapper is never created. See
 `docs/godot_raycast_allocation_research.md` for the full investigation.
 
@@ -35,7 +49,9 @@ One method is exposed from C#:
 Casts N rays in a single GDExtension call. Returns a `float[]` of `ray_count × 9` floats.
 One managed allocation per call regardless of ray count. The per-ray C++ heap work
 (`PhysicsRayQueryParameters3D` + `DictionaryPrivate`) still occurs N times — that cost is
-irreducible without engine-level access and does not affect the .NET GC.
+irreducible without engine-level access and does not affect the .NET GC. The one managed
+allocation can itself be eliminated via a P/Invoke side-channel (see
+`docs/pinvoke_zero_alloc_spec.md`), though that approach is unimplemented and unvalidated.
 
 > **Single-ray use is not exposed.** Each GDExtension dispatch carries fixed overhead
 > (Variant boxing of arguments, return-value copy across the boundary). Benchmarking shows
@@ -70,7 +86,7 @@ not equal `ray_count × 7`, all results are returned as miss.
 
 ---
 
-## Project setup
+## Installation
 
 **1. Get the binaries**
 
@@ -104,7 +120,7 @@ mechanism; build from source if you need binaries outside of a tagged release.
 > The GDExtension native class is registered internally as `RaycastBridgeNative` to avoid
 > a name collision with the C# wrapper. You do not need to interact with it directly.
 
-#### `IntersectRaysBatch` — N rays, one call
+#### Example - raycast controller for a vehicle
 
 ```csharp
 using Godot;
@@ -148,6 +164,8 @@ public partial class RaycastOrchestrator : Node
 }
 ```
 
+Further samples are included in the samples/ folder.
+
 ---
 
 ## Benchmark results
@@ -181,7 +199,7 @@ Mode C (batch size 1) is included to show the cost of the full batch machinery a
 size — it is not a recommended usage pattern. It is worse than a dedicated single-ray
 method would be because it also packs a 7-float input buffer on every call.
 
-The bridge never triggers gen2 collections at any batch size, because the returned
+**The bridge never triggers gen2 collections at any batch size,** because the returned
 `float[]` is short-lived and never promoted. Naive native code triggers gen2 (the
 `Dictionary` wrapper has a finalizer); even optimised native triggers gen1 consistently.
 Whether avoiding gen2 matters depends on your platform — on consoles and mobile, gen2
@@ -243,13 +261,11 @@ Fewer restrictions apply:
 
 ```
 RaycastBridge/
-├── godot-cpp/              # gitignored — created by setup.py
-│   └── 4.3/                # one sub-folder per Godot version
-├── bin/                    # compiled output (.dll / .dylib)
 ├── src/                    # C++ source
 ├── samples/                # C# usage examples
 ├── SConstruct
 ├── setup.py                # clones godot-cpp at the right version
+├── RaycastBridge.cs        # C#-side wrapper to simplify communication with the extension
 └── RaycastBridge.gdextension
 ```
 
