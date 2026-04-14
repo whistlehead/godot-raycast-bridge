@@ -2,6 +2,7 @@
 
 #include <godot_cpp/classes/object.hpp>
 #include <godot_cpp/classes/physics_direct_space_state3d.hpp>
+#include <godot_cpp/classes/physics_ray_query_parameters3d.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/vector3.hpp>
 
@@ -83,9 +84,14 @@ public:
         uint32_t                   collision_mask);
 
 private:
+    /// Cached query params object — allocated once, mutated per ray.
+    /// Eliminates one memnew/memdelete pair per ray in the batch hot path.
+    Ref<PhysicsRayQueryParameters3D> _query_params;
+
     /// Shared implementation. Writes 9 floats into dest[0..8].
     /// dest must point to at least 9 writable floats.
-    static void fill_result(
+    /// Reuses _query_params; do not call from multiple threads concurrently.
+    void fill_result(
         float*                     dest,
         PhysicsDirectSpaceState3D* space,
         Vector3                    from,

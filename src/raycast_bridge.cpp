@@ -22,11 +22,16 @@ void RaycastBridgeNative::fill_result(
 
     if (!space) return;
 
-    // PhysicsRayQueryParameters3D is a ref-counted heap object — one allocation
-    // per call here. Promoting this to a cached member variable would eliminate
-    // it; deferred until profiling confirms it is worth the added state.
-    Ref<PhysicsRayQueryParameters3D> params =
-        PhysicsRayQueryParameters3D::create(from, to, collision_mask);
+    // Lazy-initialise the cached params object once; mutate it on every call.
+    // This eliminates one memnew/memdelete per ray compared to calling create().
+    if (_query_params.is_null())
+        _query_params = PhysicsRayQueryParameters3D::create(from, to, collision_mask);
+    else {
+        _query_params->set_from(from);
+        _query_params->set_to(to);
+        _query_params->set_collision_mask(collision_mask);
+    }
+    Ref<PhysicsRayQueryParameters3D>& params = _query_params;
 
     // intersect_ray allocates a DictionaryPrivate on the C++ heap (via memnew) and
     // populates a HashMap<Variant,Variant> with 7 entries. That allocation is on the
