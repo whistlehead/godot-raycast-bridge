@@ -65,7 +65,7 @@ Use `RaycastBridge.GetColliderId(results, i)` to reconstruct the full 64-bit ID.
 | `+3..+5` | Direction (x, y, z) — world space, need not be normalised |
 | `+6` | Max distance — ray endpoint = origin + direction × max_dist |
 
-`collision_mask` applies uniformly to all rays in the batch. If `in_buffer.Size()` does
+`collision_mask` applies uniformly to all rays in the batch. If `in_buffer.Length` does
 not equal `ray_count × 7`, all results are returned as miss.
 
 ---
@@ -112,7 +112,7 @@ using PhysicsQueryBridge;
 
 public partial class RaycastOrchestrator : Node
 {
-    private const int RayCount = 60; // e.g. 15 rays × 4 wheels — well above the ~10-ray break-even
+    private const int RayCount = 60; // e.g. 15 rays × 4 wheels — well above the ~15–20-ray break-even
 
     private float[] _batchIn;
 
@@ -125,7 +125,13 @@ public partial class RaycastOrchestrator : Node
     {
         // Pack rays from wheel poses before calling:
         for (int i = 0; i < RayCount; i++)
+        {
+            // origin/direction/maxDist come from your wheel pose data:
+            Vector3 origin    = /* wheel[i].GlobalPosition */ default;
+            Vector3 direction = /* wheel[i].SuspensionDir  */ Vector3.Down;
+            float   maxDist   = /* wheel[i].TravelLength   */ 0.5f;
             RaycastBridge.PackRay(_batchIn, i, origin, direction, maxDist);
+        }
 
         // Single GDExtension call for all rays:
         var results = RaycastBridge.IntersectRaysBatch(_batchIn, spaceState, RayCount, collisionMask);
@@ -356,6 +362,10 @@ faster.
 Release zips are built against **Godot 4.3, 4.4, and 4.5**. Each zip is compiled against
 the matching `godot-cpp` branch and is not interchangeable — use the zip that matches your
 editor version.
+
+> **Tested on Godot 4.6.2** (using the 4.5 `godot-cpp` bindings, which are compatible for
+> this extension). Builds against 4.3 and 4.4 are provided by the CI matrix but have not
+> been runtime-tested.
 
 The extension uses no version-specific APIs beyond `PhysicsDirectSpaceState3D`, so it
 should continue to work on future 4.x releases. When a new `godot-cpp` stable branch
