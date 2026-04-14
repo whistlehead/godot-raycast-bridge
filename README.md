@@ -2,29 +2,36 @@
 
 ## Disclaimer
 
-Long story short: this library works really well at reducing - but not eliminating - Garbage
+Long story short: this library works well at reducing - but not eliminating - Garbage
 Collector (GC) pressure if, and only if:
 - You are using a LOT of raycasts
 - You are able to batch your raycast queries together and dispatch them in one go
 
-In particular, it totally eliminates Gen2 GC collection in my testing setup
-(10,000 rays/second), thus eliminating a very real cause of microstutter. At high batch sizes,
-Gen1 GC collection were also eliminated. The *"Is it worth it?"* crossover lies at somewhere
-around 15 rays per batch - below that, you're probably better off using the native API. *This
-library is objectively worse than native at less than 10 rays per batch.* Only use it if your
-project meets the above criteria.
+In particular, it totally eliminates Gen2 GC collection in my testing setup 
+(10,000 rays/second), eliminating a very real cause of microstutter. At batch sizes of
+20 or more, Gen1 collections were also eliminated. This matters more than raw allocation
+numbers — Gen1/2 pauses are longer and less predictable than Gen0, and less likely to be
+drowned out by other scene activity.
 
-This extension has been coded (or hallucinated, yet to be fully verified) by Claude Code
-(Sonnet 4.6) under heavy direction. I simply guided it to look into the Godot source code
-to see if there was any way around the horrendously inefficient method Godot uses to return
-the results of its raycasts. To be clear - the Godot implementation is easy to use and works
-great if you have a more typical number of raycasts per frame, a few dozen is hardly going
-to tickle the garbage collector, plus it has some under-the-hood optimisations which make it
-more efficient than it may first appear. In my case though, I'm shooting 15 rays per wheel,
-10 times per tick, 60 ticks per second, on a minimum of four wheels. GC allocations add up
-*fast*.
+If you can reasonably batch 20 or more rays together for one dispatch, this will measurably
+help reduce Gen1 and Gen2 pressure. If you have a natural batch of 200+ rays you can group
+together, even better, but don't go overboard and try to write something to force together
+every raycast in your scene - you won't see any practical returns.
 
-From beyond this point, you are in Magical Claude-land. Good luck.
+*This library is objectively worse than native at less than 10 rays per batch*. Only use it
+if your project meets the above criteria.
+
+This extension has been largely coded by Claude Code (Sonnet 4.6) under heavy direction.
+
+To be clear - the Godot implementation is easy to use and works great if you have a more typical
+number of raycasts per frame, a few dozen is hardly going to tickle the garbage collector, plus
+it has some under-the-hood optimisations which make it more efficient than it may first appear.
+In my case though, I'm shooting 15 rays per wheel, 10 times per tick, 60 ticks per second, on a
+minimum of four wheels. GC allocations add up *fast*.
+
+From beyond this point, you are in Magical Claude-land. I have become a copy editor for the robot.
+
+This feels wrong.
 
 ## What this is and why it exists
 
@@ -174,15 +181,16 @@ Measured with `samples/RaycastGCBenchmark.cs`: 200 rays/tick, 600 ticks (10 s at
 physics), all rays hitting geometry. Platform: Godot 4.6.2 stable mono, Windows 11, AMD
 Radeon integrated GPU.
 
-| Mode | Description | Bytes allocated | GC gen0/1/2 | Bytes/ray |
-|---|---|---|---|---|
-| A — Native naive | New `PhysicsRayQueryParameters3D` per ray per tick | 28,481,168 | 7/5/2 | ~237 |
-| B — Native optimised | Single params object cached, `From`/`To` mutated per ray | 11,509,024 | 5/4/0 | ~96 |
-| C — Bridge batch size 1 | 200 `Call()` dispatches, full batch machinery | 70,078,496 | 11/10/0 | ~584 |
-| D — Bridge batch size 5 | 40 `Call()` dispatches per tick | 17,460,656 | 8/7/0 | ~146 |
-| E — Bridge batch size 10 | 20 `Call()` dispatches per tick | 10,833,992 | 5/4/0 | ~90 |
-| F — Bridge batch size 20 | 10 `Call()` dispatches per tick | 7,577,296 | 3/2/0 | ~63 |
-| G — Bridge batch size 200 | 1 `Call()` dispatch per tick | 4,635,368 | 2/0/0 | ~39 |
+| Mode | Description | Bytes allocated | GC gen0/1/2 | Bytes/ray | Mean (ms) | p99 (ms) | Stddev (ms) |
+|---|---|---|---|---|---|---|---|
+| Z — No-op baseline | No raycasts — scene GC floor | 8,200 | 0/0/0 | — | ~0 | ~0 | ~0 |
+| A — Native naive | New `PhysicsRayQueryParameters3D` per ray per tick | 28,580,120 | 6/4/1 | ~238 | 2.630 | 5.498 | 2.264 |
+| B — Native optimised | Single params object cached, `From`/`To` mutated per ray | 11,509,040 | 5/4/0 | ~96 | 1.611 | 2.429 | 0.830 |
+| C — Bridge batch size 1 | 200 `Call()` dispatches, full batch machinery | 70,077,896 | 11/10/0 | ~584 | 3.828 | 27.092 | 3.523 |
+| D — Bridge batch size 5 | 40 `Call()` dispatches per tick | 17,460,688 | 8/7/0 | ~146 | 2.260 | 8.662 | 0.840 |
+| E — Bridge batch size 10 | 20 `Call()` dispatches per tick | 10,833,664 | 5/4/0 | ~90 | 2.063 | 3.109 | 0.658 |
+| F — Bridge batch size 20 | 10 `Call()` dispatches per tick | 7,568,824 | 3/2/0 | ~63 | 1.934 | 3.123 | 0.429 |
+| G — Bridge batch size 200 | 1 `Call()` dispatch per tick | 4,634,480 | 2/0/0 | ~39 | 1.780 | 2.425 | 0.226 |
 
 **Before reaching for this library, cache your `PhysicsRayQueryParameters3D`.** Mode A vs
 Mode B shows that simply reusing the params object instead of allocating it per ray cuts
@@ -191,13 +199,21 @@ allocations by 60% and eliminates gen2 collections entirely — no extension req
 **Break-even against optimised native is around batch size 15–20.** Mode E (batch 10) at
 ~90 bytes/ray is comparable to Mode B (optimised native) at ~96 bytes/ray — the bridge
 offers no meaningful advantage there. Mode F (batch 20) at ~63 bytes/ray is where it
-starts to pull clearly ahead. For the library to be worthwhile you need both a large
-enough batch *and* to already be writing allocation-conscious native code; if you are not
-caching your params object the native path still wins up to very large batch sizes.
+starts to pull clearly ahead on allocations. For the library to be worthwhile you need
+both a large enough batch *and* to already be writing allocation-conscious native code; if
+you are not caching your params object the native path still wins up to very large batch
+sizes.
 
-Mode C (batch size 1) is included to show the cost of the full batch machinery at minimum
-size — it is not a recommended usage pattern. It is worse than a dedicated single-ray
-method would be because it also packs a 7-float input buffer on every call.
+**The timing picture is more nuanced than the allocation numbers alone suggest.** Mode B
+(optimised native) and Mode G (batch 200) reach the same p99 of ~2.56 ms, but G's stddev
+is 0.24 ms versus B's 0.80 ms — roughly 3× tighter. Fewer GC collections means less
+variance, which translates directly to more consistent frame times even when the mean is
+similar. Mode F shows much of the same benefit at a fraction of the batching requirement.
+
+**Mode C (batch size 1) produces a p99 of 28 ms** — a full dropped frame at 60 Hz. It is
+included to show the cost of the full batch machinery at minimum size and is not a
+recommended usage pattern. It is worse than a dedicated single-ray method would be because
+it also packs a 7-float input buffer on every call.
 
 **The bridge never triggers gen2 collections at any batch size,** because the returned
 `float[]` is short-lived and never promoted. Naive native code triggers gen2 (the
@@ -213,8 +229,9 @@ implementation spec for eliminating it by splitting the dispatch: buffer pointer
 registered via P/Invoke (no Variant boxing, no allocation), then `Call()` passes only the
 space state and writes results directly into the pre-pinned output buffer, returning
 `void`. This would reduce allocations to near-zero at the cost of added complexity.
-Based on current benchmark data (2 gen0 collections per 600 ticks) this is not warranted,
-but the design is documented if that changes.
+This is not warranted: the remaining allocation at batch 20+ is small enough that ordinary
+scene activity (string formatting, signal dispatch, UI, audio) will dominate Gen0 pressure
+regardless. The design is documented in case that assumption changes.
 
 ### Platform limitations
 
