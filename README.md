@@ -29,18 +29,20 @@ instead. The managed Dictionary wrapper is never created. See
 
 ## API
 
-Two methods are registered on the `RaycastBridge` singleton:
+One method is exposed from C#:
 
-**`intersect_ray_packed(space, from, to, collision_mask) → PackedFloat32Array`**  
-Casts a single ray. Returns a `PackedFloat32Array` of 9 floats. One managed object per
-call; no finalizer. Use for low-frequency raycasts.
-
-**`intersect_rays_batch(in_buffer, space, ray_count, collision_mask) → PackedFloat32Array`**  
-Casts N rays in a single call. Returns a `PackedFloat32Array` of `ray_count × 9` floats.
-Compared to calling `intersect_ray_packed` N times: produces one managed allocation instead
-of N, and one GDExtension dispatch instead of N. The per-ray C++ heap work
+**`intersect_rays_batch(in_buffer, space, ray_count, collision_mask) → float[]`**  
+Casts N rays in a single GDExtension call. Returns a `float[]` of `ray_count × 9` floats.
+One managed allocation per call regardless of ray count. The per-ray C++ heap work
 (`PhysicsRayQueryParameters3D` + `DictionaryPrivate`) still occurs N times — that cost is
 irreducible without engine-level access and does not affect the .NET GC.
+
+> **Single-ray use is not exposed.** Each GDExtension dispatch carries fixed overhead
+> (Variant boxing of arguments, return-value copy across the boundary). Benchmarking shows
+> the bridge only outperforms *optimised* native code (cached `PhysicsRayQueryParameters3D`,
+> mutated per ray) at a batch size of roughly **15–20 rays or more**. Below that threshold,
+> call `PhysicsDirectSpaceState3D.IntersectRay` directly — and make sure you are caching
+> your params object. See [Benchmark results](#benchmark-results) below.
 
 ### Result buffer layout (9 floats per ray)
 
@@ -87,8 +89,8 @@ YourGodotProject/
         │   ├── RaycastBridge.windows.template_release.arm64.dll
         │   └── RaycastBridge.macos.template_release.universal.dylib
         └── samples/
-            ├── RaycastExample.cs
-            └── RaycastBatchExample.cs
+            ├── RaycastBatchExample.cs
+            └── RaycastGCBenchmark.cs
 ```
 
 The `bin/` folder is not committed to this repository. Releases are the distribution
@@ -102,26 +104,6 @@ mechanism; build from source if you need binaries outside of a tagged release.
 > The GDExtension native class is registered internally as `RaycastBridgeNative` to avoid
 > a name collision with the C# wrapper. You do not need to interact with it directly.
 
-#### `IntersectRay` — single ray
-
-```csharp
-using Godot;
-using PhysicsQueryBridge;
-
-public partial class MyNode : Node
-{
-    private void CastRay(Vector3 from, Vector3 to, uint collisionMask)
-    {
-        var spaceState = GetWorld3D().DirectSpaceState;
-        var result = RaycastBridge.IntersectRay(spaceState, from, to, collisionMask);
-
-        bool    hit      = RaycastBridge.GetHit(result, 0);
-        Vector3 position = RaycastBridge.GetPosition(result, 0);
-        Vector3 normal   = RaycastBridge.GetNormal(result, 0);
-    }
-}
-```
-
 #### `IntersectRaysBatch` — N rays, one call
 
 ```csharp
@@ -130,7 +112,7 @@ using PhysicsQueryBridge;
 
 public partial class RaycastOrchestrator : Node
 {
-    private const int RayCount = 12; // e.g. 3 rays × 4 wheels
+    private const int RayCount = 60; // e.g. 15 rays × 4 wheels — well above the ~10-ray break-even
 
     private float[] _batchIn;
 
@@ -159,6 +141,56 @@ public partial class RaycastOrchestrator : Node
     }
 }
 ```
+
+---
+
+## Benchmark results
+
+Measured with `samples/RaycastGCBenchmark.cs`: 200 rays/tick, 600 ticks (10 s at 60 Hz
+physics), all rays hitting geometry. Platform: Godot 4.6.2 stable mono, Windows 11, AMD
+Radeon integrated GPU.
+
+| Mode | Description | Bytes allocated | GC gen0/1/2 | Bytes/ray |
+|---|---|---|---|---|
+| A — Native naive | New `PhysicsRayQueryParameters3D` per ray per tick | 28,481,168 | 7/5/2 | ~237 |
+| B — Native optimised | Single params object cached, `From`/`To` mutated per ray | 11,509,024 | 5/4/0 | ~96 |
+| C — Bridge batch size 1 | 200 `Call()` dispatches, full batch machinery | 70,078,496 | 11/10/0 | ~584 |
+| D — Bridge batch size 5 | 40 `Call()` dispatches per tick | 17,460,656 | 8/7/0 | ~146 |
+| E — Bridge batch size 10 | 20 `Call()` dispatches per tick | 10,833,992 | 5/4/0 | ~90 |
+| F — Bridge batch size 20 | 10 `Call()` dispatches per tick | 7,577,296 | 3/2/0 | ~63 |
+| G — Bridge batch size 200 | 1 `Call()` dispatch per tick | 4,635,368 | 2/0/0 | ~39 |
+
+**Before reaching for this library, cache your `PhysicsRayQueryParameters3D`.** Mode A vs
+Mode B shows that simply reusing the params object instead of allocating it per ray cuts
+allocations by 60% and eliminates gen2 collections entirely — no extension required.
+
+**Break-even against optimised native is around batch size 15–20.** Mode E (batch 10) at
+~90 bytes/ray is comparable to Mode B (optimised native) at ~96 bytes/ray — the bridge
+offers no meaningful advantage there. Mode F (batch 20) at ~63 bytes/ray is where it
+starts to pull clearly ahead. For the library to be worthwhile you need both a large
+enough batch *and* to already be writing allocation-conscious native code; if you are not
+caching your params object the native path still wins up to very large batch sizes.
+
+Mode C (batch size 1) is included to show the cost of the full batch machinery at minimum
+size — it is not a recommended usage pattern. It is worse than a dedicated single-ray
+method would be because it also packs a 7-float input buffer on every call.
+
+The bridge never triggers gen2 collections at any batch size, because the returned
+`float[]` is short-lived and never promoted. Naive native code triggers gen2 (the
+`Dictionary` wrapper has a finalizer); even optimised native triggers gen1 consistently.
+Whether avoiding gen2 matters depends on your platform — on consoles and mobile, gen2
+pauses can be significant even at low frequency.
+
+### Further reduction via P/Invoke
+
+The remaining ~7.7 KB/tick in Mode F is almost entirely the output `float[]` allocated
+on each `Call()` return. `docs/pinvoke_zero_alloc_spec.md` contains a complete
+implementation spec for eliminating it by splitting the dispatch: buffer pointers are
+registered via P/Invoke (no Variant boxing, no allocation), then `Call()` passes only the
+space state and writes results directly into the pre-pinned output buffer, returning
+`void`. This would reduce allocations to near-zero at the cost of added complexity.
+Based on current benchmark data (2 gen0 collections per 600 ticks) this is not warranted,
+but the design is documented if that changes.
 
 ### Platform limitations
 
