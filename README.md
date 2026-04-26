@@ -21,13 +21,14 @@ every raycast in your scene - you won't see any practical returns.
 *This library is objectively worse than native at less than 10 rays per batch*. Only use it
 if your project meets the above criteria.
 
-This extension has been largely coded by Claude Code (Sonnet 4.6) under heavy direction.
-
 To be clear - the Godot implementation is easy to use and works great if you have a more typical
 number of raycasts per frame, a few dozen is hardly going to tickle the garbage collector, plus
 it has some under-the-hood optimisations which make it more efficient than it may first appear.
 In my case though, I'm shooting 15 rays per wheel, 10 times per tick, 60 ticks per second, on a
 minimum of four wheels. GC allocations add up *fast*.
+
+This extension has been largely coded by Claude Code (Sonnet 4.6) under heavy direction. It
+behaves as expected in all circumstances I've tested.
 
 From beyond this point, you are in Magical Claude-land. I have become a copy editor for the robot.
 
