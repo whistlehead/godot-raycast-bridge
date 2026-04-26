@@ -11,6 +11,86 @@ pacing issues.
 If that changes — larger batches, higher tick rates, tighter platforms — this is the
 next step.
 
+## API design note — buffer ownership
+
+The pinned output buffer (`GCHandle`, `float*`) must be owned by the `RaycastBridge`
+static class, not the caller. The caller's migration path must be a single method swap:
+
+```csharp
+// Before:
+var results = RaycastBridge.IntersectRaysBatch(_batchIn, space, RayCount, mask);
+
+// After:
+RaycastBridge.IntersectRaysDirect(_batchIn, space, RayCount, mask);
+// results are read from the same buffer accessors — GetHit, GetPosition, etc.
+```
+
+`RaycastBridge` internally manages buffer sizing (growing as needed, never shrinking),
+GCHandle pinning, and the P/Invoke + Call() split. No `_Ready`/`_ExitTree` lifecycle
+work is required from calling code.
+
+## Known risks (reviewed 2026-04-26, Godot 4.6.2)
+
+These were assessed before implementation began. They are recorded here so they are
+re-evaluated if implementation is attempted.
+
+### HIGH — DLL module identity (the mechanism's foundational assumption)
+
+The entire side-channel relies on P/Invoke resolving `RaycastBridge.dll` to the **same
+in-process module instance** that Godot loaded as a GDExtension, so that `thread_local`
+statics written by the P/Invoke call are visible to `intersect_rays_direct`. If Godot's
+extension loader clones the DLL to a temp path before loading it, the OS will map two
+distinct modules. P/Invoke resolves one; Godot's `Call()` dispatches into the other. The
+`thread_local` statics are not shared — `t_in_buf` is `nullptr` when
+`intersect_rays_direct` runs, producing silent all-miss results with no crash.
+
+**Status:** The GDExtension loader's cloning behaviour is not explicitly documented as
+stable (see godot-proposals#10904). Setting `reloadable = false` in the `.gdextension`
+file is expected to suppress cloning but is not guaranteed. This must be validated
+explicitly before shipping. The `if (!t_in_buf || !t_out_buf)` guard in
+`intersect_rays_direct` is a correctness requirement, not just a defensive nicety — it
+is the only observable signal if the two-module failure occurs.
+
+### MEDIUM — Jolt as default physics engine (Godot 4.5+), threading assumptions
+
+`thread_local` is correct only if the P/Invoke call (`SetBuffers`) and the `Call()`
+dispatch (`intersect_rays_direct`) execute on the same OS thread. When both are made
+from `_PhysicsProcess` this is guaranteed. If called from a worker thread or a deferred
+context, it is not. Jolt became the default 3D physics engine in Godot 4.5/4.6 and has
+a known instability with "Run on Separate Thread" enabled (editor freezes, issue
+#113620) — not a correctness risk in shipped builds but relevant for development
+iteration. A debug-only thread-identity assertion is advisable.
+
+### LOW — GCHandle lifetime in unsafe C#
+
+Pinned `GCHandle` objects are owned by `RaycastBridge` and persist for the process
+lifetime (never freed, since the static class has no destructor hook). This is correct:
+the GC must not move the output buffer for the duration of any `IntersectRaysDirect`
+call. The risk is that if the internal buffer is resized (reallocated), the old handle
+must be freed and a new one allocated for the new array before the next call. Failing
+to do so would leave a stale `float*` in the C++ thread-locals. The implementation must
+free the old handle atomically with pinning the new array.
+
+### LOW — `PhysicsDirectSpaceState3D*` validity window
+
+The `space` pointer is valid for the duration of `_PhysicsProcess`. Since
+`intersect_rays_direct` is called synchronously within that frame it is safe. Calling
+deferred would make it unsafe. This cannot be enforced in code; it must be documented.
+
+### LOW — `_query_params` is not thread-safe (pre-existing)
+
+`_query_params` is a member variable mutated per-ray inside `fill_result`. The new
+`intersect_rays_direct` path reuses `fill_result` and inherits this constraint.
+Safe as long as the class is used as a singleton from one physics thread, which is the
+documented usage pattern.
+
+### LOW — `extern "C"` symbol name on non-Windows platforms
+
+The `[DllImport]` name must match the unmangled C symbol exactly (`raycast_set_buffers`).
+The platform export macro (already in the spec) handles `__declspec(dllexport)` vs
+`__attribute__((visibility("default")))`. On Linux, verify the symbol is exported with
+`nm -D` before assuming P/Invoke will find it.
+
 ---
 
 ## The problem this solves
