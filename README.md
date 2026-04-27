@@ -7,19 +7,20 @@ Collector (GC) pressure if, and only if:
 - You are using a LOT of raycasts
 - You are able to batch your raycast queries together and dispatch them in one go
 
-In particular, it totally eliminates Gen2 GC collection in my testing setup 
+In particular, it totally eliminates Gen2 GC collection in my testing setup
 (10,000 rays/second), eliminating a very real cause of microstutter. At batch sizes of
 20 or more, Gen1 collections were also eliminated. This matters more than raw allocation
 numbers — Gen1/2 pauses are longer and less predictable than Gen0, and less likely to be
 drowned out by other scene activity.
 
-If you can reasonably batch 20 or more rays together for one dispatch, this will measurably
-help reduce Gen1 and Gen2 pressure. If you have a natural batch of 200+ rays you can group
-together, even better, but don't go overboard and try to write something to force together
-every raycast in your scene - you won't see any practical returns.
+Reading hit results from the native dictionary also allocates — each field access boxes a
+new managed value. At high call rates this compounds the base allocation cost significantly.
+The bridge returns a plain struct; field reads are zero-allocation regardless of how many
+fields you read.
 
-*This library is objectively worse than native at less than 10 rays per batch*. Only use it
-if your project meets the above criteria.
+In a typical use scenario, if you can reasonably batch 10 or more rays together for one dispatch, this will measurably help reduce Gen1 and Gen2 pressure. If you are reading 2 or more fields from every cast, the native p99 spikes above 5 ms even with optimised code — the bridge reduces that to under 4.5 ms at batch 2, and under 3.5 ms at batch 10. If you have a natural batch of 200+ rays you can group together, even better, but don't go overboard and try to force together every raycast in your scene — you won't see any practical returns beyond batch 20.
+
+*This library is objectively worse than native in all cases at batch size 1.* The crossover point depends on how many fields you read: batch 20 if reading 0–1 fields, batch 2 if reading 2–3 fields. Only use it if your project meets the above criteria.
 
 To be clear - the Godot implementation is easy to use and works great if you have a more typical
 number of raycasts per frame, a few dozen is hardly going to tickle the garbage collector, plus
@@ -62,11 +63,15 @@ allocation can itself be eliminated via a P/Invoke side-channel (see
 `docs/pinvoke_zero_alloc_spec.md`), though that approach is unimplemented and unvalidated.
 
 > **Single-ray use is not exposed.** Each GDExtension dispatch carries fixed overhead
-> (Variant boxing of arguments, return-value copy across the boundary). Benchmarking shows
-> the bridge only outperforms *optimised* native code (cached `PhysicsRayQueryParameters3D`,
-> mutated per ray) at a batch size of roughly **15–20 rays or more**. Below that threshold,
-> call `PhysicsDirectSpaceState3D.IntersectRay` directly — and make sure you are caching
-> your params object. See [Benchmark results](#benchmark-results) below.
+> (Variant boxing of arguments, return-value copy across the boundary). How quickly the
+> bridge pays for that overhead depends on how many fields you read — native dictionary
+> reads allocate per field, bridge struct reads do not. Benchmarking shows the bridge
+> outperforms *optimised* native code (cached `PhysicsRayQueryParameters3D`, mutated per
+> ray, cached `StringName` keys) at a batch size of roughly **20 rays** when reading 0–1
+> fields, **2 rays** when reading 2–3 fields (native p99 spikes sharply above 5 ms at that
+> point). Below those thresholds, call `PhysicsDirectSpaceState3D.IntersectRay` directly —
+> and make sure you are caching your params object. See
+> [Benchmark results](#benchmark-results) below.
 
 ### Result buffer layout (9 floats per ray)
 
@@ -179,48 +184,137 @@ Further samples are included in the samples/ folder.
 ## Benchmark results
 
 Measured with `samples/RaycastGCBenchmark.cs`: 200 rays/tick, 600 ticks (10 s at 60 Hz
-physics), all rays hitting geometry. Platform: Godot 4.6.2 stable mono, Windows 11, AMD
-Radeon integrated GPU.
+physics), all rays hitting geometry. Platform: Godot 4.6.2 stable mono, Windows 11, NVIDIA
+GeForce RTX 2060.
 
-| Mode | Description | Bytes allocated | GC gen0/1/2 | Bytes/ray | Mean (ms) | p99 (ms) | Stddev (ms) |
-|---|---|---|---|---|---|---|---|
-| Z — No-op baseline | No raycasts — scene GC floor | 8,200 | 0/0/0 | — | ~0 | ~0 | ~0 |
-| A — Native naive | New `PhysicsRayQueryParameters3D` per ray per tick | 28,580,120 | 6/4/1 | ~238 | 2.630 | 5.498 | 2.264 |
-| B — Native optimised | Single params object cached, `From`/`To` mutated per ray | 11,509,040 | 5/4/0 | ~96 | 1.611 | 2.429 | 0.830 |
-| C — Bridge batch size 1 | 200 `Call()` dispatches, full batch machinery | 70,077,896 | 11/10/0 | ~584 | 3.828 | 27.092 | 3.523 |
-| D — Bridge batch size 5 | 40 `Call()` dispatches per tick | 17,460,688 | 8/7/0 | ~146 | 2.260 | 8.662 | 0.840 |
-| E — Bridge batch size 10 | 20 `Call()` dispatches per tick | 10,833,664 | 5/4/0 | ~90 | 2.063 | 3.109 | 0.658 |
-| F — Bridge batch size 20 | 10 `Call()` dispatches per tick | 7,568,824 | 3/2/0 | ~63 | 1.934 | 3.123 | 0.429 |
-| G — Bridge batch size 200 | 1 `Call()` dispatch per tick | 4,634,480 | 2/0/0 | ~39 | 1.780 | 2.425 | 0.226 |
+Each dispatch mode is measured four times: no result reads, position only, position + normal,
+and all fields. This isolates the cost of the cross-boundary mechanism itself from the cost of
+consuming the result — a distinction that matters because native dictionary reads allocate per
+field accessed, while bridge struct reads do not.
 
-**Before reaching for this library, cache your `PhysicsRayQueryParameters3D`.** Mode A vs
-Mode B shows that simply reusing the params object instead of allocating it per ray cuts
-allocations by 60% and eliminates gen2 collections entirely — no extension required.
+**Mode descriptions**
 
-**Break-even against optimised native is around batch size 15–20.** Mode E (batch 10) at
-~90 bytes/ray is comparable to Mode B (optimised native) at ~96 bytes/ray — the bridge
-offers no meaningful advantage there. Mode F (batch 20) at ~63 bytes/ray is where it
-starts to pull clearly ahead on allocations. For the library to be worthwhile you need
-both a large enough batch *and* to already be writing allocation-conscious native code; if
-you are not caching your params object the native path still wins up to very large batch
-sizes.
+| Label | Description |
+|---|---|
+| Z — No-op | No raycasts — scene GC floor |
+| A — Native naive | New `PhysicsRayQueryParameters3D` per ray; plain string keys on read |
+| B — Native optimised | Single params object cached, `From`/`To` mutated per ray; cached `StringName` keys on read |
+| C — Bridge batch 1 | 200 `Call()` dispatches per tick — full batch machinery at minimum size |
+| H — Bridge batch 2 | 100 `Call()` dispatches per tick |
+| D — Bridge batch 5 | 40 `Call()` dispatches per tick |
+| E — Bridge batch 10 | 20 `Call()` dispatches per tick |
+| F — Bridge batch 20 | 10 `Call()` dispatches per tick |
+| G — Bridge batch 200 | 1 `Call()` dispatch per tick |
 
-**The timing picture is more nuanced than the allocation numbers alone suggest.** Mode B
-(optimised native) and Mode G (batch 200) reach the same p99 of ~2.56 ms, but G's stddev
-is 0.24 ms versus B's 0.80 ms — roughly 3× tighter. Fewer GC collections means less
-variance, which translates directly to more consistent frame times even when the mean is
-similar. Mode F shows much of the same benefit at a fraction of the batching requirement.
+### Table 1 — No reads (mechanism cost only)
 
-**Mode C (batch size 1) produces a p99 of 28 ms** — a full dropped frame at 60 Hz. It is
-included to show the cost of the full batch machinery at minimum size and is not a
-recommended usage pattern. It is worse than a dedicated single-ray method would be because
-it also packs a 7-float input buffer on every call.
+| Mode | Bytes allocated | GC gen0/1/2 | Bytes/ray | Mean (ms) | p99 (ms) | Stddev (ms) |
+|---|---|---|---|---|---|---|
+| Z — No-op | 8,200 | 0/0/0 | — | ~0 | ~0 | ~0 |
+| A — Native naive | 28,817,728 | 4/2/1 | ~240 | 1.774 | 4.718 | 2.495 |
+| B — Native optimised | 14,446,720 | 2/1/0 | ~120 | 1.164 | 2.978 | 1.322 |
+| C — Bridge batch 1 | 70,078,576 | 11/10/0 | ~584 | 2.343 | 21.719 | 2.766 |
+| H — Bridge batch 2 | 36,948,888 | 5/4/0 | ~308 | 1.653 | 4.416 | 1.694 |
+| D — Bridge batch 5 | 17,465,832 | 2/1/0 | ~146 | 1.343 | 3.757 | 1.110 |
+| E — Bridge batch 10 | 10,839,512 | 1/0/0 | ~90 | 1.151 | 3.221 | 0.520 |
+| F — Bridge batch 20 | 7,576,760 | 1/0/0 | ~63 | 1.132 | 3.254 | 0.520 |
+| G — Bridge batch 200 | 4,644,896 | 0/0/0 | ~39 | 1.032 | 2.722 | 0.391 |
+
+### Table 2 — Read position only (1 field)
+
+| Mode | Bytes allocated | GC gen0/1/2 | Bytes/ray | Mean (ms) | p99 (ms) | Stddev (ms) |
+|---|---|---|---|---|---|---|
+| Z — No-op | 8,200 | 0/0/0 | — | ~0 | ~0 | ~0 |
+| A — Native naive | 37,429,768 | 5/4/0 | ~312 | 1.891 | 5.360 | 1.813 |
+| B — Native optimised | 24,948,864 | 3/2/0 | ~208 | 1.320 | 3.396 | 1.311 |
+| C — Bridge batch 1 | 70,070,640 | 11/10/0 | ~584 | 2.397 | 21.155 | 2.901 |
+| H — Bridge batch 2 | 36,948,888 | 5/4/0 | ~308 | 1.710 | 4.818 | 1.696 |
+| D — Bridge batch 5 | 17,465,832 | 2/1/0 | ~146 | 1.297 | 3.760 | 0.819 |
+| E — Bridge batch 10 | 10,839,512 | 1/0/0 | ~90 | 1.166 | 3.354 | 0.533 |
+| F — Bridge batch 20 | 7,576,760 | 1/0/0 | ~63 | 1.053 | 2.851 | 0.363 |
+| G — Bridge batch 200 | 4,644,896 | 0/0/0 | ~39 | 0.990 | 2.677 | 0.295 |
+
+### Table 3 — Read position + normal (2 fields)
+
+| Mode | Bytes allocated | GC gen0/1/2 | Bytes/ray | Mean (ms) | p99 (ms) | Stddev (ms) |
+|---|---|---|---|---|---|---|
+| Z — No-op | 8,200 | 0/0/0 | — | ~0 | ~0 | ~0 |
+| A — Native naive | 50,873,280 | 8/7/0 | ~424 | 2.170 | 20.521 | 2.391 |
+| B — Native optimised | 38,393,664 | 6/5/0 | ~320 | 1.577 | 5.173 | 1.827 |
+| C — Bridge batch 1 | 70,070,640 | 11/10/0 | ~584 | 2.347 | 21.289 | 2.611 |
+| H — Bridge batch 2 | 36,949,208 | 5/4/0 | ~308 | 1.665 | 4.315 | 1.710 |
+| D — Bridge batch 5 | 17,465,832 | 2/1/0 | ~146 | 1.264 | 3.450 | 0.799 |
+| E — Bridge batch 10 | 10,839,512 | 1/0/0 | ~90 | 1.177 | 3.503 | 0.535 |
+| F — Bridge batch 20 | 7,576,760 | 1/0/0 | ~63 | 1.071 | 2.951 | 0.404 |
+| G — Bridge batch 200 | 4,644,896 | 0/0/0 | ~39 | 0.979 | 2.689 | 0.266 |
+
+### Table 4 — Read all fields (position, normal, collider ID — 3 fields)
+
+| Mode | Bytes allocated | GC gen0/1/2 | Bytes/ray | Mean (ms) | p99 (ms) | Stddev (ms) |
+|---|---|---|---|---|---|---|
+| Z — No-op | 8,200 | 0/0/0 | — | ~0 | ~0 | ~0 |
+| A — Native naive | 64,310,872 | 10/9/0 | ~536 | 2.453 | 21.544 | 2.712 |
+| B — Native optimised | 51,832,272 | 8/7/0 | ~432 | 1.785 | 17.622 | 2.101 |
+| C — Bridge batch 1 | 70,070,640 | 11/10/0 | ~584 | 2.426 | 21.030 | 2.632 |
+| H — Bridge batch 2 | 36,948,888 | 5/4/0 | ~308 | 1.706 | 4.670 | 1.727 |
+| D — Bridge batch 5 | 17,465,832 | 2/1/0 | ~146 | 1.299 | 3.548 | 0.852 |
+| E — Bridge batch 10 | 10,839,512 | 1/0/0 | ~90 | 1.158 | 3.306 | 0.548 |
+| F — Bridge batch 20 | 7,576,760 | 1/0/0 | ~63 | 1.059 | 3.139 | 0.415 |
+| G — Bridge batch 200 | 4,644,896 | 0/0/0 | ~39 | 0.991 | 2.657 | 0.301 |
+
+---
+
+### When is the bridge worthwhile?
+
+"Worthwhile" here means low *and consistent* frame time: p99 below the native baseline, gen1
+collections eliminated, and stddev tight. These are more meaningful than mean time alone
+because gen1/2 pauses are the direct cause of visible microstutter.
+
+**"Probably worthwhile"** — p99 is already below native optimised; gen1 fires less often or
+not at all; meaningful jitter reduction over native.
+
+**"Definitely worthwhile"** — p99 is well clear of native; gen1 is fully eliminated; stddev
+is tight and stable regardless of field count.
+
+| | 0 fields read | 1 field (position) | 2 fields (pos + normal) | 3 fields (all) |
+|---|---|---|---|---|
+| **Native optimised p99** | 2.978 ms | 3.396 ms | 5.173 ms | 17.622 ms |
+| **Probably worthwhile at** | batch 20 | batch 20 | batch 2 | batch 2 |
+| **Definitely worthwhile at** | batch 20 | batch 20 | batch 10 | batch 10 |
+
+At 0–1 fields the bridge p99 only drops below native at batch 20 — the GDExtension dispatch
+overhead isn't offset by dictionary savings until the batch is large enough. At 2 fields the
+native p99 spikes to 5.2 ms (gen1 firing 5×); batch 2 already beats that at 4.3 ms with half
+the gen1 activity. At 3 fields native p99 hits 17.6 ms; batch 2 brings it to 4.7 ms
+immediately. The "definitely" threshold is batch 10 for 2–3 fields because that is where gen1
+is fully eliminated and p99 stabilises around 3.3–3.5 ms.
+
+**The crossover point moves sharply with field count because native dictionary reads allocate
+per field,** while bridge reads do not. Native optimised bytes/ray: ~120 (0 fields) → ~208 (1
+field) → ~320 (2 fields) → ~432 (3 fields) — a linear ~112 bytes per field, confirmed by the
+new 2-field run. Bridge bytes/ray are identical across all four tables (~308 at batch 2, ~146
+at batch 5, ~90 at batch 10), so every additional field you read from the native dictionary
+moves the break-even to a smaller batch size.
+
+**Before reaching for this library, cache your `PhysicsRayQueryParameters3D`.** Table 1,
+Mode A vs Mode B: simply reusing the params object cuts allocations by 50% and eliminates
+gen2 collections — no extension required.
+
+**Reading 2+ fields from the native dictionary causes p99 spikes even with the optimised
+path.** At 2 fields, native optimised p99 is 5.2 ms (gen1 fires 5×); at 3 fields it reaches
+17.6 ms (gen1 fires 7×). These are the pauses that produce visible stutter. The bridge
+eliminates them entirely at batch 10+, and reduces them sharply at batch 2.
 
 **The bridge never triggers gen2 collections at any batch size,** because the returned
-`float[]` is short-lived and never promoted. Naive native code triggers gen2 (the
-`Dictionary` wrapper has a finalizer); even optimised native triggers gen1 consistently.
-Whether avoiding gen2 matters depends on your platform — on consoles and mobile, gen2
-pauses can be significant even at low frequency.
+`float[]` is short-lived and never promoted. Naive native code triggers gen2 even with no
+reads (the `Dictionary` wrapper has a finalizer); optimised native avoids gen2 but still
+triggers gen1 consistently. Whether avoiding gen1/2 matters depends on your platform — on
+consoles and mobile, higher-generation pauses can be significant even at low frequency.
+
+**Mode C (batch size 1) is included to show the cost floor of the batch machinery** and is
+not a recommended usage pattern. It is worse than a dedicated single-ray dispatch would be
+because it also packs a 7-float input buffer on every call. Its bytes/ray are unchanged
+across all four tables, confirming that bridge reads add no allocation overhead.
 
 ### Further reduction via P/Invoke
 

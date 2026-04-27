@@ -6,24 +6,26 @@ using PhysicsQueryBridge;
 /// <summary>
 /// GC pressure benchmark — attach to a Node3D in a scene that has collidable geometry below it.
 ///
-/// Cycles through seven modes, each running for exactly TicksPerRun physics ticks then pausing for
-/// PauseTicks ticks while GC.Collect() is called to reset heap state before the next run.
-/// An initial warmup pause (same length as PauseTicks) precedes all runs to allow JIT compilation
-/// of hot paths and discard any startup-frame GC noise before measurement begins.
+/// Each dispatch mode runs four times in sequence: no reads (_N), position only (_P),
+/// position + normal (_PN), and all fields (_A). This produces four result tables covering
+/// the full range of realistic field-read counts. Each sub-run is separated by a GC pause
+/// identical to the pause between dispatch modes.
 ///
 /// Modes
-///   Z  No-op baseline              → no raycasts — establishes the GC floor for this scene
-///   A  Native Godot — naive        new PhysicsRayQueryParameters3D per ray, per tick
-///   B  Native Godot — optimised    single params object cached in _Ready, mutated per ray
-///   C  Bridge batch of 1           → float[] per ray            — 200 float[] allocations/tick
-///   D  Bridge batch of 5           → float[] per batch          —  40 float[] allocations/tick
-///   E  Bridge batch of 10          → float[] per batch          —  20 float[] allocations/tick
-///   F  Bridge batch of 20          → float[] per batch          —  10 float[] allocations/tick
-///   G  Bridge single batch of 200  → float[] per tick           —   1 float[] allocation/tick
+///   Z    No-op baseline              → no raycasts — establishes the GC floor for this scene
+///   A_N/P/PN/A  Native naive         new params per ray; reads with plain string keys
+///   B_N/P/PN/A  Native optimised     cached params; reads with cached StringName keys
+///   C_N/P/PN/A  Bridge batch of 1    → float[] per ray            — 200 float[] allocations/tick
+///   H_N/P/PN/A  Bridge batch of 2    → float[] per batch          — 100 float[] allocations/tick
+///   D_N/P/PN/A  Bridge batch of 5    → float[] per batch          —  40 float[] allocations/tick
+///   E_N/P/PN/A  Bridge batch of 10   → float[] per batch          —  20 float[] allocations/tick
+///   F_N/P/PN/A  Bridge batch of 20   → float[] per batch          —  10 float[] allocations/tick
+///   G_N/P/PN/A  Bridge batch of 200  → float[] per tick           —   1 float[] allocation/tick
 ///
 /// Modes A and B bracket the native baseline: A shows what typical unoptimised code
-/// produces; B shows the best achievable without leaving the native API. The gap between
-/// them is often larger than the gap between B and the bridge at small ray counts.
+/// produces (new params + plain string key reads); B shows the best achievable without
+/// leaving the native API (cached params + cached StringName reads). The string key
+/// cost is not isolated separately as it is expected to be below measurement noise.
 ///
 /// Mode C uses IntersectRaysBatch with rayCount=1 on each ray. Note it is worse than a
 /// dedicated single-ray method would be (~584 bytes/ray vs ~472 bytes/ray measured with
@@ -55,7 +57,18 @@ public partial class RaycastGCBenchmark : Node3D
     // State
     // ---------------------------------------------------------------------------
 
-    private enum Mode { Z_Noop, A_NativeNaive, B_NativeOptimised, C_Batch1, D_Batch5, E_Batch10, F_Batch20, G_Batch200 }
+    private enum ReadMode { None, Position, PositionNormal, AllFields }
+
+    // Ordering: all _N modes, then all _P modes, then all _PN modes, then all _A modes —
+    // so each read-mode group appears as a contiguous block in the output and maps to one table.
+    private enum Mode
+    {
+        Z_Noop,
+        A_NativeNaive_N,  B_NativeOpt_N,  C_Batch1_N,  H_Batch2_N,  D_Batch5_N,  E_Batch10_N,  F_Batch20_N,  G_Batch200_N,
+        A_NativeNaive_P,  B_NativeOpt_P,  C_Batch1_P,  H_Batch2_P,  D_Batch5_P,  E_Batch10_P,  F_Batch20_P,  G_Batch200_P,
+        A_NativeNaive_PN, B_NativeOpt_PN, C_Batch1_PN, H_Batch2_PN, D_Batch5_PN, E_Batch10_PN, F_Batch20_PN, G_Batch200_PN,
+        A_NativeNaive_A,  B_NativeOpt_A,  C_Batch1_A,  H_Batch2_A,  D_Batch5_A,  E_Batch10_A,  F_Batch20_A,  G_Batch200_A,
+    }
     private enum Phase { WarmupPause, Running, Pausing, Done }
 
     private Mode  _mode  = Mode.Z_Noop;
@@ -73,6 +86,7 @@ public partial class RaycastGCBenchmark : Node3D
     // Pre-allocated input buffers for each batch size, allocated once in _Ready.
     // The native side requires in_buffer.size() == rayCount * 7 exactly.
     private float[] _inBuffer1;    //   1 * 7
+    private float[] _inBuffer2;    //   2 * 7
     private float[] _inBuffer5;    //   5 * 7
     private float[] _inBuffer10;   //  10 * 7
     private float[] _inBuffer20;   //  20 * 7
@@ -84,6 +98,10 @@ public partial class RaycastGCBenchmark : Node3D
     // Pre-computed ray origins spread on a flat XZ grid, all firing straight down.
     private Vector3[] _rayOrigins;
 
+    // Sinks for read results — prevents the compiler eliminating reads as dead code.
+    private Vector3 _sinkVec;
+    private ulong   _sinkId;
+
     // ---------------------------------------------------------------------------
     // Lifecycle
     // ---------------------------------------------------------------------------
@@ -91,6 +109,7 @@ public partial class RaycastGCBenchmark : Node3D
     public override void _Ready()
     {
         _inBuffer1   = new float[  1 * 7];
+        _inBuffer2   = new float[  2 * 7];
         _inBuffer5   = new float[  5 * 7];
         _inBuffer10  = new float[ 10 * 7];
         _inBuffer20  = new float[ 20 * 7];
@@ -167,8 +186,17 @@ public partial class RaycastGCBenchmark : Node3D
         int  gen2Delta  = GC.CollectionCount(2) - _gen2Before;
         long allocDelta = GC.GetTotalAllocatedBytes(precise: false) - _allocBefore;
 
+        string readLabel = _mode switch
+        {
+            var m when m.ToString().EndsWith("_N")  => "no reads",
+            var m when m.ToString().EndsWith("_P")  => "read position",
+            var m when m.ToString().EndsWith("_PN") => "read position + normal",
+            var m when m.ToString().EndsWith("_A")  => "read all fields",
+            _                                       => "n/a"
+        };
+
         GD.Print("──────────────────────────────────────────────────");
-        GD.Print($"[GcBenchmark] Mode {_mode} complete");
+        GD.Print($"[GcBenchmark] Mode {_mode} ({readLabel}) complete");
         int raysCast = _mode == Mode.Z_Noop ? 0 : _ticksThisRun * RaysPerTick;
         GD.Print($"  Ticks       : {_ticksThisRun}  ({raysCast} rays cast)");
         GD.Print($"  Hits        : {_hitsThisRun}");
@@ -188,7 +216,7 @@ public partial class RaycastGCBenchmark : Node3D
         GC.WaitForPendingFinalizers();
         GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
 
-        if (_mode == Mode.G_Batch200)
+        if (_mode == Mode.G_Batch200_A)
         {
             _phase = Phase.Done;
             GD.Print("──────────────────────────────────────────────────");
@@ -198,14 +226,43 @@ public partial class RaycastGCBenchmark : Node3D
 
         _mode = _mode switch
         {
-            Mode.Z_Noop            => Mode.A_NativeNaive,
-            Mode.A_NativeNaive     => Mode.B_NativeOptimised,
-            Mode.B_NativeOptimised => Mode.C_Batch1,
-            Mode.C_Batch1          => Mode.D_Batch5,
-            Mode.D_Batch5          => Mode.E_Batch10,
-            Mode.E_Batch10         => Mode.F_Batch20,
-            Mode.F_Batch20         => Mode.G_Batch200,
-            _                      => Mode.G_Batch200
+            Mode.Z_Noop           => Mode.A_NativeNaive_N,
+            // No-reads block
+            Mode.A_NativeNaive_N  => Mode.B_NativeOpt_N,
+            Mode.B_NativeOpt_N    => Mode.C_Batch1_N,
+            Mode.C_Batch1_N       => Mode.H_Batch2_N,
+            Mode.H_Batch2_N       => Mode.D_Batch5_N,
+            Mode.D_Batch5_N       => Mode.E_Batch10_N,
+            Mode.E_Batch10_N      => Mode.F_Batch20_N,
+            Mode.F_Batch20_N      => Mode.G_Batch200_N,
+            // Position-only block
+            Mode.G_Batch200_N     => Mode.A_NativeNaive_P,
+            Mode.A_NativeNaive_P  => Mode.B_NativeOpt_P,
+            Mode.B_NativeOpt_P    => Mode.C_Batch1_P,
+            Mode.C_Batch1_P       => Mode.H_Batch2_P,
+            Mode.H_Batch2_P       => Mode.D_Batch5_P,
+            Mode.D_Batch5_P       => Mode.E_Batch10_P,
+            Mode.E_Batch10_P      => Mode.F_Batch20_P,
+            Mode.F_Batch20_P      => Mode.G_Batch200_P,
+            // Position + normal block
+            Mode.G_Batch200_P     => Mode.A_NativeNaive_PN,
+            Mode.A_NativeNaive_PN => Mode.B_NativeOpt_PN,
+            Mode.B_NativeOpt_PN   => Mode.C_Batch1_PN,
+            Mode.C_Batch1_PN      => Mode.H_Batch2_PN,
+            Mode.H_Batch2_PN      => Mode.D_Batch5_PN,
+            Mode.D_Batch5_PN      => Mode.E_Batch10_PN,
+            Mode.E_Batch10_PN     => Mode.F_Batch20_PN,
+            Mode.F_Batch20_PN     => Mode.G_Batch200_PN,
+            // All-fields block
+            Mode.G_Batch200_PN    => Mode.A_NativeNaive_A,
+            Mode.A_NativeNaive_A  => Mode.B_NativeOpt_A,
+            Mode.B_NativeOpt_A    => Mode.C_Batch1_A,
+            Mode.C_Batch1_A       => Mode.H_Batch2_A,
+            Mode.H_Batch2_A       => Mode.D_Batch5_A,
+            Mode.D_Batch5_A       => Mode.E_Batch10_A,
+            Mode.E_Batch10_A      => Mode.F_Batch20_A,
+            Mode.F_Batch20_A      => Mode.G_Batch200_A,
+            _                     => Mode.G_Batch200_A
         };
 
         GD.Print($"[GcBenchmark] Starting Mode {_mode}");
@@ -224,15 +281,49 @@ public partial class RaycastGCBenchmark : Node3D
         _tickTimer.Restart();
         _hitsThisRun += _mode switch
         {
-            Mode.Z_Noop            => 0,
-            Mode.A_NativeNaive     => TickNativeNaive(space),
-            Mode.B_NativeOptimised => TickNativeOptimised(space),
-            Mode.C_Batch1          => TickBatch(space, 1,   _inBuffer1),
-            Mode.D_Batch5          => TickBatch(space, 5,   _inBuffer5),
-            Mode.E_Batch10         => TickBatch(space, 10,  _inBuffer10),
-            Mode.F_Batch20         => TickBatch(space, 20,  _inBuffer20),
-            Mode.G_Batch200        => TickBatch(space, 200, _inBuffer200),
-            _                      => 0
+            Mode.Z_Noop           => 0,
+
+            Mode.A_NativeNaive_N  => TickNativeNaive(space, ReadMode.None),
+            Mode.A_NativeNaive_P  => TickNativeNaive(space, ReadMode.Position),
+            Mode.A_NativeNaive_PN => TickNativeNaive(space, ReadMode.PositionNormal),
+            Mode.A_NativeNaive_A  => TickNativeNaive(space, ReadMode.AllFields),
+
+            Mode.B_NativeOpt_N    => TickNativeOptimised(space, ReadMode.None),
+            Mode.B_NativeOpt_P    => TickNativeOptimised(space, ReadMode.Position),
+            Mode.B_NativeOpt_PN   => TickNativeOptimised(space, ReadMode.PositionNormal),
+            Mode.B_NativeOpt_A    => TickNativeOptimised(space, ReadMode.AllFields),
+
+            Mode.C_Batch1_N       => TickBatch(space, 1,   _inBuffer1,   ReadMode.None),
+            Mode.C_Batch1_P       => TickBatch(space, 1,   _inBuffer1,   ReadMode.Position),
+            Mode.C_Batch1_PN      => TickBatch(space, 1,   _inBuffer1,   ReadMode.PositionNormal),
+            Mode.C_Batch1_A       => TickBatch(space, 1,   _inBuffer1,   ReadMode.AllFields),
+
+            Mode.H_Batch2_N       => TickBatch(space, 2,   _inBuffer2,   ReadMode.None),
+            Mode.H_Batch2_P       => TickBatch(space, 2,   _inBuffer2,   ReadMode.Position),
+            Mode.H_Batch2_PN      => TickBatch(space, 2,   _inBuffer2,   ReadMode.PositionNormal),
+            Mode.H_Batch2_A       => TickBatch(space, 2,   _inBuffer2,   ReadMode.AllFields),
+
+            Mode.D_Batch5_N       => TickBatch(space, 5,   _inBuffer5,   ReadMode.None),
+            Mode.D_Batch5_P       => TickBatch(space, 5,   _inBuffer5,   ReadMode.Position),
+            Mode.D_Batch5_PN      => TickBatch(space, 5,   _inBuffer5,   ReadMode.PositionNormal),
+            Mode.D_Batch5_A       => TickBatch(space, 5,   _inBuffer5,   ReadMode.AllFields),
+
+            Mode.E_Batch10_N      => TickBatch(space, 10,  _inBuffer10,  ReadMode.None),
+            Mode.E_Batch10_P      => TickBatch(space, 10,  _inBuffer10,  ReadMode.Position),
+            Mode.E_Batch10_PN     => TickBatch(space, 10,  _inBuffer10,  ReadMode.PositionNormal),
+            Mode.E_Batch10_A      => TickBatch(space, 10,  _inBuffer10,  ReadMode.AllFields),
+
+            Mode.F_Batch20_N      => TickBatch(space, 20,  _inBuffer20,  ReadMode.None),
+            Mode.F_Batch20_P      => TickBatch(space, 20,  _inBuffer20,  ReadMode.Position),
+            Mode.F_Batch20_PN     => TickBatch(space, 20,  _inBuffer20,  ReadMode.PositionNormal),
+            Mode.F_Batch20_A      => TickBatch(space, 20,  _inBuffer20,  ReadMode.AllFields),
+
+            Mode.G_Batch200_N     => TickBatch(space, 200, _inBuffer200, ReadMode.None),
+            Mode.G_Batch200_P     => TickBatch(space, 200, _inBuffer200, ReadMode.Position),
+            Mode.G_Batch200_PN    => TickBatch(space, 200, _inBuffer200, ReadMode.PositionNormal),
+            Mode.G_Batch200_A     => TickBatch(space, 200, _inBuffer200, ReadMode.AllFields),
+
+            _                     => 0
         };
         _tickTimer.Stop();
         _tickTimesMs[_ticksThisRun - 1] = _tickTimer.Elapsed.TotalMilliseconds;
@@ -246,9 +337,13 @@ public partial class RaycastGCBenchmark : Node3D
     /// scene setup so other modes can be read relative to it.
     /// (Dispatch is handled inline in RunTick via the switch expression returning 0.)
 
-    /// Mode A: naive native — new PhysicsRayQueryParameters3D allocated on every tick.
-    /// Represents typical unoptimised Godot C# raycast code.
-    private int TickNativeNaive(PhysicsDirectSpaceState3D space)
+    // Cached StringNames for optimised native read (Mode B) — avoids string allocations on lookup.
+    private static readonly StringName _keyPosition = "position";
+    private static readonly StringName _keyNormal   = "normal";
+    private static readonly StringName _keyColliderId = "collider_id";
+
+    /// Mode A: naive native — new params allocated per ray, plain string keys on read.
+    private int TickNativeNaive(PhysicsDirectSpaceState3D space, ReadMode read)
     {
         int hits = 0;
         for (int i = 0; i < RaysPerTick; i++)
@@ -263,14 +358,21 @@ public partial class RaycastGCBenchmark : Node3D
             };
             var result = space.IntersectRay(queryParams);
             if (result.Count > 0)
+            {
                 hits++;
+                if (read >= ReadMode.Position)
+                    _sinkVec = result["position"].AsVector3();
+                if (read >= ReadMode.PositionNormal)
+                    _sinkVec = result["normal"].AsVector3();
+                if (read == ReadMode.AllFields)
+                    _sinkId  = result["collider_id"].AsUInt64();
+            }
         }
         return hits;
     }
 
-    /// Mode B: optimised native — single PhysicsRayQueryParameters3D cached in _Ready,
-    /// From/To mutated per ray. Best achievable without leaving the native API.
-    private int TickNativeOptimised(PhysicsDirectSpaceState3D space)
+    /// Mode B: optimised native — cached params, cached StringName keys on read.
+    private int TickNativeOptimised(PhysicsDirectSpaceState3D space, ReadMode read)
     {
         int hits = 0;
         for (int i = 0; i < RaysPerTick; i++)
@@ -280,14 +382,22 @@ public partial class RaycastGCBenchmark : Node3D
 
             var result = space.IntersectRay(_queryParams);
             if (result.Count > 0)
+            {
                 hits++;
+                if (read >= ReadMode.Position)
+                    _sinkVec = result[_keyPosition].AsVector3();
+                if (read >= ReadMode.PositionNormal)
+                    _sinkVec = result[_keyNormal].AsVector3();
+                if (read == ReadMode.AllFields)
+                    _sinkId  = result[_keyColliderId].AsUInt64();
+            }
         }
         return hits;
     }
 
-    /// Modes B–F: bridge batch dispatch with a given batch size, using a pre-allocated input buffer.
+    /// Bridge batch dispatch with a given batch size, using a pre-allocated input buffer.
     /// RaysPerTick must be divisible by batchSize.
-    private int TickBatch(PhysicsDirectSpaceState3D space, int batchSize, float[] inBuffer)
+    private int TickBatch(PhysicsDirectSpaceState3D space, int batchSize, float[] inBuffer, ReadMode read)
     {
         int hits       = 0;
         int batchCount = RaysPerTick / batchSize;
@@ -305,7 +415,15 @@ public partial class RaycastGCBenchmark : Node3D
             for (int i = 0; i < batchSize; i++)
             {
                 if (RaycastBridge.GetHit(results, i))
+                {
                     hits++;
+                    if (read >= ReadMode.Position)
+                        _sinkVec = RaycastBridge.GetPosition(results, i);
+                    if (read >= ReadMode.PositionNormal)
+                        _sinkVec = RaycastBridge.GetNormal(results, i);
+                    if (read == ReadMode.AllFields)
+                        _sinkId  = RaycastBridge.GetColliderId(results, i);
+                }
             }
         }
         return hits;

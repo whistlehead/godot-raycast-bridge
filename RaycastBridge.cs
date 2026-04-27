@@ -30,26 +30,20 @@ public static class RaycastBridge
     /// regardless of ray count.
     ///
     /// <para>
-    /// Performance note: each GDExtension dispatch carries fixed overhead from Variant
-    /// boxing of arguments and the return-value copy across the C#/C++ boundary.
-    /// Benchmarking at 200 rays/tick (60 Hz, AMD integrated GPU) shows:
-    /// <list type="table">
-    ///   <item><term>Batch size 1  </term><description>~584 bytes/ray — 6× worse than optimised native</description></item>
-    ///   <item><term>Batch size 5  </term><description>~146 bytes/ray — ~52% worse than optimised native</description></item>
-    ///   <item><term>Batch size 10 </term><description>~90 bytes/ray  — roughly equal to optimised native (~96)</description></item>
-    ///   <item><term>Batch size 20 </term><description>~63 bytes/ray  — ~34% better than optimised native</description></item>
-    ///   <item><term>Batch size 200</term><description>~39 bytes/ray  — ~59% better than optimised native</description></item>
-    /// </list>
-    /// Break-even against optimised native (cached <c>PhysicsRayQueryParameters3D</c>,
-    /// mutated per ray) is around batch size 15–20. Below that, prefer Godot's built-in
-    /// <c>PhysicsDirectSpaceState3D.IntersectRay</c> directly.
-    /// </para>
-    ///
-    /// <para>
-    /// Note: even at batch size 1 the bridge avoids gen2 collections entirely
-    /// (the returned float[] is short-lived and collected at gen0/1). Whether that
-    /// matters depends on how expensive your gen2 collections are relative to the
-    /// increased gen0/1 pressure.
+    /// When to use this instead of <c>PhysicsDirectSpaceState3D.IntersectRay</c>:
+    /// each GDExtension dispatch has fixed overhead, so small batches can be worse than
+    /// optimised native. The break-even batch size depends on how many result fields you
+    /// read — native dictionary reads allocate per field, bridge struct reads do not.
+    /// "Worth it" matrix (ballpark — see README for full data):
+    ///   3 fields per ray (position + normal + ID): batch 2+
+    ///   2 fields per ray (eg position + normal):   batch 2+
+    ///   1 field  per ray (eg position only):       batch 20+
+    ///   0 fields per ray (no reads):               batch 20+
+    /// The primary benefit is p99 frame time (microstutter), not mean time. Native
+    /// dictionary reads cause gen1 collection spikes at 2+ fields; the bridge avoids
+    /// these entirely at batch 10+, and reduces them at batch 2+.
+    /// See https://github.com/whistlehead/godot-raycast-bridge/blob/main/README.md for
+    /// full benchmark data.
     /// </para>
     ///
     /// inBuffer must be pre-allocated to rayCount * 7 floats by the caller.
