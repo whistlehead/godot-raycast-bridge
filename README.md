@@ -103,7 +103,7 @@ not equal `ray_count × 7`, all results are returned as miss.
 
 **1. Get the binaries**
 
-Pre-built binaries for Windows (x86-64, ARM64) and macOS (Universal) are attached to each
+Pre-built binaries for Windows (x86-64, ARM64), Linux (x86-64) and macOS (Universal) are attached to each
 [GitHub Release](../../releases). Download the zip for your Godot version and drag the
 `addons/` folder directly into your Godot project root. The layout after extraction:
 
@@ -116,6 +116,7 @@ YourGodotProject/
         ├── bin/
         │   ├── RaycastBridge.windows.template_release.x86_64.dll
         │   ├── RaycastBridge.windows.template_release.arm64.dll
+        │   ├── RaycastBridge.linux.template_release.x86_64.so
         │   └── RaycastBridge.macos.template_release.universal.dylib
         └── samples/
             ├── RaycastBatchExample.cs
@@ -390,7 +391,7 @@ can coexist under `godot-cpp/` without interfering with each other.
 - A C++17-capable compiler:
   - **Windows:** Visual Studio 2019+ (MSVC) — open a Developer Command Prompt so `cl.exe` is on PATH, or pass `use_mingw=yes` for MinGW-w64
   - **macOS:** Xcode Command Line Tools (`xcode-select --install`)
-  - **Linux:** GCC or Clang (`sudo apt install build-essential scons`)
+  - **Linux:** GCC or Clang (Debian/Ubuntu: `sudo apt install build-essential scons`; Fedora: `sudo dnf install gcc-c++ python3-scons`)
 
 ### Steps
 

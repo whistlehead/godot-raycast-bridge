@@ -98,6 +98,51 @@ jobs:
           name: bin-${{ matrix.godot_version }}-windows-arm64
           path: bin/RaycastBridge.windows.*arm64*.dll
 
+  # ── Linux x86-64 ────────────────────────────────────────────────────────────
+  # Built on the oldest supported Ubuntu runner: a .so runs on distros with the same
+  # or newer glibc than the build machine, so older build host = wider compatibility.
+  build-linux-x86_64:
+    name: Linux x86-64 (Godot ${{ matrix.godot_version }})
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        godot_version: ["4.3", "4.4", "4.5"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache godot-cpp
+        uses: actions/cache@v4
+        id: cache-godotcpp
+        with:
+          path: godot-cpp/${{ matrix.godot_version }}
+          key: godotcpp-${{ matrix.godot_version }}-linux-x86_64
+
+      - name: Clone godot-cpp
+        if: steps.cache-godotcpp.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/godotengine/godot-cpp \
+            --branch ${{ matrix.godot_version }} \
+            --depth 1 \
+            --recurse-submodules \
+            godot-cpp/${{ matrix.godot_version }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - run: pip install scons
+
+      - name: Build (debug)
+        run: scons target=template_debug platform=linux arch=x86_64 godot_version=${{ matrix.godot_version }}
+
+      - name: Build (release)
+        run: scons target=template_release platform=linux arch=x86_64 godot_version=${{ matrix.godot_version }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.godot_version }}-linux-x86_64
+          path: bin/RaycastBridge.linux.*x86_64*.so
+
   # ── macOS Universal ─────────────────────────────────────────────────────────
   build-macos:
     name: macOS Universal (Godot ${{ matrix.godot_version }})
@@ -166,7 +211,7 @@ jobs:
   release:
     name: Publish Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-windows-x86_64, build-windows-arm64, build-macos]
+    needs: [build-windows-x86_64, build-windows-arm64, build-linux-x86_64, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

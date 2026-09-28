@@ -9,6 +9,10 @@ windows.release.x86_64 = "res://addons/RaycastBridge/bin/RaycastBridge.windows.t
 windows.debug.arm64    = "res://addons/RaycastBridge/bin/RaycastBridge.windows.template_debug.arm64.dll"
 windows.release.arm64  = "res://addons/RaycastBridge/bin/RaycastBridge.windows.template_release.arm64.dll"
 
+; Linux
+linux.debug.x86_64   = "res://addons/RaycastBridge/bin/RaycastBridge.linux.template_debug.x86_64.so"
+linux.release.x86_64 = "res://addons/RaycastBridge/bin/RaycastBridge.linux.template_release.x86_64.so"
+
 ; macOS — use the universal (fat) binary that covers both x86-64 and arm64
 macos.debug   = "res://addons/RaycastBridge/bin/RaycastBridge.macos.template_debug.universal.dylib"
 macos.release = "res://addons/RaycastBridge/bin/RaycastBridge.macos.template_release.universal.dylib"
