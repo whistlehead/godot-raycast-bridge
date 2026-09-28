@@ -63,7 +63,7 @@ public:
     /// caller; pass the same array back each tick and Godot's ref-counting avoids
     /// a deep copy on return.
     ///
-    /// in_buffer layout  (7 floats per ray, stride 7):
+    /// ray_buffer layout  (7 floats per ray, stride 7):
     ///   [i*7 + 0..2]  origin     (x, y, z) — world space
     ///   [i*7 + 3..5]  direction  (x, y, z) — world space, does not need to be normalised
     ///                             ray endpoint = origin + direction * max_dist
@@ -78,7 +78,7 @@ public:
     ///
     /// collision_mask applies uniformly to all rays in the batch.
     PackedFloat32Array intersect_rays_batch(
-        PackedFloat32Array         in_buffer,
+        PackedFloat32Array         ray_buffer,
         PhysicsDirectSpaceState3D* space,
         int                        ray_count,
         uint32_t                   collision_mask);

@@ -46,17 +46,17 @@ public static class RaycastBridge
     /// full benchmark data.
     /// </para>
     ///
-    /// inBuffer must be pre-allocated to rayCount * 7 floats by the caller.
+    /// rayBuffer must be pre-allocated to rayCount * 7 floats by the caller.
     /// Use PackRay to fill it before calling this method.
     /// </summary>
     public static float[] IntersectRaysBatch(
-        float[] inBuffer,
+        float[] rayBuffer,
         PhysicsDirectSpaceState3D space,
         int rayCount,
         uint collisionMask)
     {
         return (float[])Native.Call(
-            _methodIntersectRaysBatch, inBuffer, space, rayCount, collisionMask);
+            _methodIntersectRaysBatch, rayBuffer, space, rayCount, collisionMask);
     }
 
     // -------------------------------------------------------------------------
@@ -65,20 +65,37 @@ public static class RaycastBridge
 
     /// <summary>
     /// Writes one ray into the batch input buffer at the given index.
-    /// inBuffer must be pre-allocated to at least (index + 1) * 7 floats.
+    /// rayBuffer must be pre-allocated to at least (index + 1) * 7 floats.
     /// direction need not be normalised; the ray endpoint is origin + direction * maxDist.
     /// </summary>
     public static void PackRay(
-        float[] inBuffer,
+        float[] rayBuffer,
         int index,
         Vector3 origin,
         Vector3 direction,
         float maxDist)
     {
         int o = index * 7;
-        inBuffer[o + 0] = origin.X;    inBuffer[o + 1] = origin.Y;    inBuffer[o + 2] = origin.Z;
-        inBuffer[o + 3] = direction.X; inBuffer[o + 4] = direction.Y; inBuffer[o + 5] = direction.Z;
-        inBuffer[o + 6] = maxDist;
+        rayBuffer[o + 0] = origin.X;    rayBuffer[o + 1] = origin.Y;    rayBuffer[o + 2] = origin.Z;
+        rayBuffer[o + 3] = direction.X; rayBuffer[o + 4] = direction.Y; rayBuffer[o + 5] = direction.Z;
+        rayBuffer[o + 6] = maxDist;
+    }
+
+    /// <summary>
+    /// Reads back the ray definition at the given index from a batch input buffer.
+    /// Inverse of PackRay.
+    /// </summary>
+    public static void UnpackRay(
+        float[] rayBuffer,
+        int index,
+        out Vector3 origin,
+        out Vector3 direction,
+        out float maxDist)
+    {
+        int o = index * 7;
+        origin    = new Vector3(rayBuffer[o + 0], rayBuffer[o + 1], rayBuffer[o + 2]);
+        direction = new Vector3(rayBuffer[o + 3], rayBuffer[o + 4], rayBuffer[o + 5]);
+        maxDist   = rayBuffer[o + 6];
     }
 
     /// <summary>
@@ -117,5 +134,22 @@ public static class RaycastBridge
         uint lo = BitConverter.SingleToUInt32Bits(results[o]);
         uint hi = BitConverter.SingleToUInt32Bits(results[o + 1]);
         return ((ulong)hi << 32) | lo;
+    }
+
+    /// <summary>
+    /// Reads every field for the ray at the given index in one call. Returns the hit flag.
+    /// On a miss, position and normal are zero and colliderId is 0.
+    /// </summary>
+    public static bool UnpackHit(
+        float[] results,
+        int index,
+        out Vector3 position,
+        out Vector3 normal,
+        out ulong colliderId)
+    {
+        position   = GetPosition(results, index);
+        normal     = GetNormal(results, index);
+        colliderId = GetColliderId(results, index);
+        return GetHit(results, index);
     }
 }

@@ -84,13 +84,13 @@ public partial class RaycastGCBenchmark : Node3D
     private          double[]  _tickTimesMs;   // allocated once in _Ready to TicksPerRun; no resizing
 
     // Pre-allocated input buffers for each batch size, allocated once in _Ready.
-    // The native side requires in_buffer.size() == rayCount * 7 exactly.
-    private float[] _inBuffer1;    //   1 * 7
-    private float[] _inBuffer2;    //   2 * 7
-    private float[] _inBuffer5;    //   5 * 7
-    private float[] _inBuffer10;   //  10 * 7
-    private float[] _inBuffer20;   //  20 * 7
-    private float[] _inBuffer200;  // 200 * 7
+    // The native side requires ray_buffer.size() == rayCount * 7 exactly.
+    private float[] _rayBuffer1;    //   1 * 7
+    private float[] _rayBuffer2;    //   2 * 7
+    private float[] _rayBuffer5;    //   5 * 7
+    private float[] _rayBuffer10;   //  10 * 7
+    private float[] _rayBuffer20;   //  20 * 7
+    private float[] _rayBuffer200;  // 200 * 7
 
     // Cached query params for Mode B — allocated once in _Ready, mutated per ray.
     private PhysicsRayQueryParameters3D _queryParams;
@@ -108,12 +108,12 @@ public partial class RaycastGCBenchmark : Node3D
 
     public override void _Ready()
     {
-        _inBuffer1   = new float[  1 * 7];
-        _inBuffer2   = new float[  2 * 7];
-        _inBuffer5   = new float[  5 * 7];
-        _inBuffer10  = new float[ 10 * 7];
-        _inBuffer20  = new float[ 20 * 7];
-        _inBuffer200 = new float[200 * 7];
+        _rayBuffer1   = new float[  1 * 7];
+        _rayBuffer2   = new float[  2 * 7];
+        _rayBuffer5   = new float[  5 * 7];
+        _rayBuffer10  = new float[ 10 * 7];
+        _rayBuffer20  = new float[ 20 * 7];
+        _rayBuffer200 = new float[200 * 7];
         _rayOrigins  = BuildGrid(RaysPerTick, GridSpacing);
         _tickTimesMs = new double[TicksPerRun];
         _queryParams = new PhysicsRayQueryParameters3D
@@ -293,35 +293,35 @@ public partial class RaycastGCBenchmark : Node3D
             Mode.B_NativeOpt_PN   => TickNativeOptimised(space, ReadMode.PositionNormal),
             Mode.B_NativeOpt_A    => TickNativeOptimised(space, ReadMode.AllFields),
 
-            Mode.C_Batch1_N       => TickBatch(space, 1,   _inBuffer1,   ReadMode.None),
-            Mode.C_Batch1_P       => TickBatch(space, 1,   _inBuffer1,   ReadMode.Position),
-            Mode.C_Batch1_PN      => TickBatch(space, 1,   _inBuffer1,   ReadMode.PositionNormal),
-            Mode.C_Batch1_A       => TickBatch(space, 1,   _inBuffer1,   ReadMode.AllFields),
+            Mode.C_Batch1_N       => TickBatch(space, 1,   _rayBuffer1,   ReadMode.None),
+            Mode.C_Batch1_P       => TickBatch(space, 1,   _rayBuffer1,   ReadMode.Position),
+            Mode.C_Batch1_PN      => TickBatch(space, 1,   _rayBuffer1,   ReadMode.PositionNormal),
+            Mode.C_Batch1_A       => TickBatch(space, 1,   _rayBuffer1,   ReadMode.AllFields),
 
-            Mode.H_Batch2_N       => TickBatch(space, 2,   _inBuffer2,   ReadMode.None),
-            Mode.H_Batch2_P       => TickBatch(space, 2,   _inBuffer2,   ReadMode.Position),
-            Mode.H_Batch2_PN      => TickBatch(space, 2,   _inBuffer2,   ReadMode.PositionNormal),
-            Mode.H_Batch2_A       => TickBatch(space, 2,   _inBuffer2,   ReadMode.AllFields),
+            Mode.H_Batch2_N       => TickBatch(space, 2,   _rayBuffer2,   ReadMode.None),
+            Mode.H_Batch2_P       => TickBatch(space, 2,   _rayBuffer2,   ReadMode.Position),
+            Mode.H_Batch2_PN      => TickBatch(space, 2,   _rayBuffer2,   ReadMode.PositionNormal),
+            Mode.H_Batch2_A       => TickBatch(space, 2,   _rayBuffer2,   ReadMode.AllFields),
 
-            Mode.D_Batch5_N       => TickBatch(space, 5,   _inBuffer5,   ReadMode.None),
-            Mode.D_Batch5_P       => TickBatch(space, 5,   _inBuffer5,   ReadMode.Position),
-            Mode.D_Batch5_PN      => TickBatch(space, 5,   _inBuffer5,   ReadMode.PositionNormal),
-            Mode.D_Batch5_A       => TickBatch(space, 5,   _inBuffer5,   ReadMode.AllFields),
+            Mode.D_Batch5_N       => TickBatch(space, 5,   _rayBuffer5,   ReadMode.None),
+            Mode.D_Batch5_P       => TickBatch(space, 5,   _rayBuffer5,   ReadMode.Position),
+            Mode.D_Batch5_PN      => TickBatch(space, 5,   _rayBuffer5,   ReadMode.PositionNormal),
+            Mode.D_Batch5_A       => TickBatch(space, 5,   _rayBuffer5,   ReadMode.AllFields),
 
-            Mode.E_Batch10_N      => TickBatch(space, 10,  _inBuffer10,  ReadMode.None),
-            Mode.E_Batch10_P      => TickBatch(space, 10,  _inBuffer10,  ReadMode.Position),
-            Mode.E_Batch10_PN     => TickBatch(space, 10,  _inBuffer10,  ReadMode.PositionNormal),
-            Mode.E_Batch10_A      => TickBatch(space, 10,  _inBuffer10,  ReadMode.AllFields),
+            Mode.E_Batch10_N      => TickBatch(space, 10,  _rayBuffer10,  ReadMode.None),
+            Mode.E_Batch10_P      => TickBatch(space, 10,  _rayBuffer10,  ReadMode.Position),
+            Mode.E_Batch10_PN     => TickBatch(space, 10,  _rayBuffer10,  ReadMode.PositionNormal),
+            Mode.E_Batch10_A      => TickBatch(space, 10,  _rayBuffer10,  ReadMode.AllFields),
 
-            Mode.F_Batch20_N      => TickBatch(space, 20,  _inBuffer20,  ReadMode.None),
-            Mode.F_Batch20_P      => TickBatch(space, 20,  _inBuffer20,  ReadMode.Position),
-            Mode.F_Batch20_PN     => TickBatch(space, 20,  _inBuffer20,  ReadMode.PositionNormal),
-            Mode.F_Batch20_A      => TickBatch(space, 20,  _inBuffer20,  ReadMode.AllFields),
+            Mode.F_Batch20_N      => TickBatch(space, 20,  _rayBuffer20,  ReadMode.None),
+            Mode.F_Batch20_P      => TickBatch(space, 20,  _rayBuffer20,  ReadMode.Position),
+            Mode.F_Batch20_PN     => TickBatch(space, 20,  _rayBuffer20,  ReadMode.PositionNormal),
+            Mode.F_Batch20_A      => TickBatch(space, 20,  _rayBuffer20,  ReadMode.AllFields),
 
-            Mode.G_Batch200_N     => TickBatch(space, 200, _inBuffer200, ReadMode.None),
-            Mode.G_Batch200_P     => TickBatch(space, 200, _inBuffer200, ReadMode.Position),
-            Mode.G_Batch200_PN    => TickBatch(space, 200, _inBuffer200, ReadMode.PositionNormal),
-            Mode.G_Batch200_A     => TickBatch(space, 200, _inBuffer200, ReadMode.AllFields),
+            Mode.G_Batch200_N     => TickBatch(space, 200, _rayBuffer200, ReadMode.None),
+            Mode.G_Batch200_P     => TickBatch(space, 200, _rayBuffer200, ReadMode.Position),
+            Mode.G_Batch200_PN    => TickBatch(space, 200, _rayBuffer200, ReadMode.PositionNormal),
+            Mode.G_Batch200_A     => TickBatch(space, 200, _rayBuffer200, ReadMode.AllFields),
 
             _                     => 0
         };
@@ -397,7 +397,7 @@ public partial class RaycastGCBenchmark : Node3D
 
     /// Bridge batch dispatch with a given batch size, using a pre-allocated input buffer.
     /// RaysPerTick must be divisible by batchSize.
-    private int TickBatch(PhysicsDirectSpaceState3D space, int batchSize, float[] inBuffer, ReadMode read)
+    private int TickBatch(PhysicsDirectSpaceState3D space, int batchSize, float[] rayBuffer, ReadMode read)
     {
         int hits       = 0;
         int batchCount = RaysPerTick / batchSize;
@@ -408,10 +408,10 @@ public partial class RaycastGCBenchmark : Node3D
             for (int i = 0; i < batchSize; i++)
             {
                 Vector3 origin = _rayOrigins[baseIdx + i] + GlobalPosition;
-                RaycastBridge.PackRay(inBuffer, i, origin, Vector3.Down, RayLength);
+                RaycastBridge.PackRay(rayBuffer, i, origin, Vector3.Down, RayLength);
             }
 
-            var results = RaycastBridge.IntersectRaysBatch(inBuffer, space, batchSize, collisionMask: 0xFFFFFFFF);
+            var results = RaycastBridge.IntersectRaysBatch(rayBuffer, space, batchSize, collisionMask: 0xFFFFFFFF);
             for (int i = 0; i < batchSize; i++)
             {
                 if (RaycastBridge.GetHit(results, i))

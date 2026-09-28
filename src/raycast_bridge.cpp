@@ -99,7 +99,7 @@ PackedFloat32Array RaycastBridgeNative::intersect_ray_packed(
 // ---------------------------------------------------------------------------
 
 PackedFloat32Array RaycastBridgeNative::intersect_rays_batch(
-    PackedFloat32Array         in_buffer,
+    PackedFloat32Array         ray_buffer,
     PhysicsDirectSpaceState3D* space,
     int                        ray_count,
     uint32_t                   collision_mask)
@@ -111,9 +111,9 @@ PackedFloat32Array RaycastBridgeNative::intersect_rays_batch(
     if (!space) return out;
 
     const int expected_in = ray_count * 7;
-    if (in_buffer.size() != expected_in) return out; // malformed input; return all-miss
+    if (ray_buffer.size() != expected_in) return out; // malformed input; return all-miss
 
-    const float* in  = in_buffer.ptr();
+    const float* in  = ray_buffer.ptr();
     float*       dst = out.ptrw();
 
     for (int i = 0; i < ray_count; ++i) {
@@ -142,6 +142,6 @@ void RaycastBridgeNative::_bind_methods()
         &RaycastBridgeNative::intersect_ray_packed);
 
     ClassDB::bind_method(
-        D_METHOD("intersect_rays_batch", "in_buffer", "space", "ray_count", "collision_mask"),
+        D_METHOD("intersect_rays_batch", "ray_buffer", "space", "ray_count", "collision_mask"),
         &RaycastBridgeNative::intersect_rays_batch);
 }

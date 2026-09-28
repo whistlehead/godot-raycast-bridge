@@ -11,11 +11,11 @@ public partial class RaycastBatchExample : Node3D
     [Export] public float ConeAngleDeg = 30f;
     [Export] public int   RayCount    = 16;
 
-    private float[] _inBuffer;
+    private float[] _rayBuffer;
 
     public override void _Ready()
     {
-        _inBuffer = new float[RayCount * 7];
+        _rayBuffer = new float[RayCount * 7];
     }
 
     public override void _Input(InputEvent @event)
@@ -44,11 +44,11 @@ public partial class RaycastBatchExample : Node3D
                 -cosAngle,
                 sinAngle * Mathf.Sin(azimuth)
             );
-            RaycastBridge.PackRay(_inBuffer, i, origin, direction, RayLength);
+            RaycastBridge.PackRay(_rayBuffer, i, origin, direction, RayLength);
         }
 
         var space   = GetWorld3D().DirectSpaceState;
-        var results = RaycastBridge.IntersectRaysBatch(_inBuffer, space, RayCount, collisionMask: 0xFFFFFFFF);
+        var results = RaycastBridge.IntersectRaysBatch(_rayBuffer, space, RayCount, collisionMask: 0xFFFFFFFF);
 
         int hitCount = 0;
         for (int i = 0; i < RayCount; i++)

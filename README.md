@@ -54,7 +54,7 @@ instead. The managed Dictionary wrapper is never created. See
 
 One method is exposed from C#:
 
-**`intersect_rays_batch(in_buffer, space, ray_count, collision_mask) → float[]`**  
+**`intersect_rays_batch(ray_buffer, space, ray_count, collision_mask) → float[]`**  
 Casts N rays in a single GDExtension call. Returns a `float[]` of `ray_count × 9` floats.
 One managed allocation per call regardless of ray count. The per-ray C++ heap work
 (`PhysicsRayQueryParameters3D` + `DictionaryPrivate`) still occurs N times — that cost is
@@ -94,7 +94,7 @@ Use `RaycastBridge.GetColliderId(results, i)` to reconstruct the full 64-bit ID.
 | `+3..+5` | Direction (x, y, z) — world space, need not be normalised |
 | `+6` | Max distance — ray endpoint = origin + direction × max_dist |
 
-`collision_mask` applies uniformly to all rays in the batch. If `in_buffer.Length` does
+`collision_mask` applies uniformly to all rays in the batch. If `ray_buffer.Length` does
 not equal `ray_count × 7`, all results are returned as miss.
 
 ---
@@ -144,11 +144,11 @@ public partial class RaycastOrchestrator : Node
 {
     private const int RayCount = 60; // e.g. 15 rays × 4 wheels — well above the ~15–20-ray break-even
 
-    private float[] _batchIn;
+    private float[] _rayBuffer;
 
     public override void _Ready()
     {
-        _batchIn = new float[RayCount * 7];
+        _rayBuffer = new float[RayCount * 7];
     }
 
     private void DispatchAndRead(PhysicsDirectSpaceState3D spaceState, uint collisionMask)
@@ -160,11 +160,11 @@ public partial class RaycastOrchestrator : Node
             Vector3 origin    = /* wheel[i].GlobalPosition */ default;
             Vector3 direction = /* wheel[i].SuspensionDir  */ Vector3.Down;
             float   maxDist   = /* wheel[i].TravelLength   */ 0.5f;
-            RaycastBridge.PackRay(_batchIn, i, origin, direction, maxDist);
+            RaycastBridge.PackRay(_rayBuffer, i, origin, direction, maxDist);
         }
 
         // Single GDExtension call for all rays:
-        var results = RaycastBridge.IntersectRaysBatch(_batchIn, spaceState, RayCount, collisionMask);
+        var results = RaycastBridge.IntersectRaysBatch(_rayBuffer, spaceState, RayCount, collisionMask);
 
         // Read results by ray index:
         for (int i = 0; i < RayCount; i++)

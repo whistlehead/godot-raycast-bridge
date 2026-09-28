@@ -18,10 +18,10 @@ static class, not the caller. The caller's migration path must be a single metho
 
 ```csharp
 // Before:
-var results = RaycastBridge.IntersectRaysBatch(_batchIn, space, RayCount, mask);
+var results = RaycastBridge.IntersectRaysBatch(_rayBuffer, space, RayCount, mask);
 
 // After:
-RaycastBridge.IntersectRaysDirect(_batchIn, space, RayCount, mask);
+RaycastBridge.IntersectRaysDirect(_rayBuffer, space, RayCount, mask);
 // results are read from the same buffer accessors — GetHit, GetPosition, etc.
 ```
 
@@ -41,13 +41,13 @@ in-process module instance** that Godot loaded as a GDExtension, so that `thread
 statics written by the P/Invoke call are visible to `intersect_rays_direct`. If Godot's
 extension loader clones the DLL to a temp path before loading it, the OS will map two
 distinct modules. P/Invoke resolves one; Godot's `Call()` dispatches into the other. The
-`thread_local` statics are not shared — `t_in_buf` is `nullptr` when
+`thread_local` statics are not shared — `t_ray_buf` is `nullptr` when
 `intersect_rays_direct` runs, producing silent all-miss results with no crash.
 
 **Status:** The GDExtension loader's cloning behaviour is not explicitly documented as
 stable (see godot-proposals#10904). Setting `reloadable = false` in the `.gdextension`
 file is expected to suppress cloning but is not guaranteed. This must be validated
-explicitly before shipping. The `if (!t_in_buf || !t_out_buf)` guard in
+explicitly before shipping. The `if (!t_ray_buf || !t_results_buf)` guard in
 `intersect_rays_direct` is a correctness requirement, not just a defensive nicety — it
 is the only observable signal if the two-module failure occurs.
 
@@ -160,45 +160,45 @@ boundary.
 ### C# caller — complete pattern
 
 ```csharp
-private GCHandle _inHandle, _outHandle;
-private unsafe float* _inPtr, _outPtr;
-private float[] _inBuffer, _outBuffer;
+private GCHandle _rayHandle, _resultsHandle;
+private unsafe float* _rayPtr, _resultsPtr;
+private float[] _rayBuffer, _resultsBuffer;
 
 public override void _Ready()
 {
-    _inBuffer  = new float[RayCount * 7];
-    _outBuffer = new float[RayCount * 9];
+    _rayBuffer     = new float[RayCount * 7];
+    _resultsBuffer = new float[RayCount * 9];
 
     // Pin for the lifetime of the node. Free in _ExitTree.
-    _inHandle  = GCHandle.Alloc(_inBuffer,  GCHandleType.Pinned);
-    _outHandle = GCHandle.Alloc(_outBuffer, GCHandleType.Pinned);
-    _inPtr  = (float*)_inHandle.AddrOfPinnedObject();
-    _outPtr = (float*)_outHandle.AddrOfPinnedObject();
+    _rayHandle     = GCHandle.Alloc(_rayBuffer,     GCHandleType.Pinned);
+    _resultsHandle = GCHandle.Alloc(_resultsBuffer, GCHandleType.Pinned);
+    _rayPtr     = (float*)_rayHandle.AddrOfPinnedObject();
+    _resultsPtr = (float*)_resultsHandle.AddrOfPinnedObject();
 }
 
 public override void _ExitTree()
 {
-    _inHandle.Free();
-    _outHandle.Free();
+    _rayHandle.Free();
+    _resultsHandle.Free();
 }
 
 private unsafe void DispatchRays(PhysicsDirectSpaceState3D space)
 {
-    // Pack ray definitions into _inBuffer (no allocation).
+    // Pack ray definitions into _rayBuffer (no allocation).
     for (int i = 0; i < RayCount; i++)
-        RaycastBridge.PackRay(_inBuffer, i, origins[i], direction, maxDist);
+        RaycastBridge.PackRay(_rayBuffer, i, origins[i], direction, maxDist);
 
     // fixed is a no-op when the array is already pinned, but required by the compiler.
-    fixed (float* unused = _inBuffer)
+    fixed (float* unused = _rayBuffer)
     {
-        RaycastBridge.SetBuffers(_inPtr, _outPtr, RayCount, collisionMask); // P/Invoke
-        Native.Call(_methodIntersectRaysDirect, space);                     // Call()
+        RaycastBridge.SetBuffers(_rayPtr, _resultsPtr, RayCount, collisionMask); // P/Invoke
+        Native.Call(_methodIntersectRaysDirect, space);                          // Call()
     }
 
-    // Read from _outBuffer — zero allocations from this point.
+    // Read from _resultsBuffer — zero allocations from this point.
     for (int i = 0; i < RayCount; i++)
     {
-        if (RaycastBridge.GetHit(_outBuffer, i)) { ... }
+        if (RaycastBridge.GetHit(_resultsBuffer, i)) { ... }
     }
 }
 ```
@@ -211,9 +211,9 @@ private unsafe void DispatchRays(PhysicsDirectSpaceState3D space)
 
 ```cpp
 // raycast_bridge.cpp
-thread_local static float*   t_in_buf        = nullptr;
-thread_local static float*   t_out_buf       = nullptr;
-thread_local static int      t_ray_count     = 0;
+thread_local static float*   t_ray_buf        = nullptr;
+thread_local static float*   t_results_buf    = nullptr;
+thread_local static int      t_ray_count      = 0;
 thread_local static uint32_t t_collision_mask = 0;
 ```
 
@@ -225,10 +225,10 @@ practice, but `thread_local` is safer if the API is ever used from worker thread
 
 ```cpp
 extern "C" __declspec(dllexport)  // Windows; use __attribute__((visibility("default"))) on macOS/Linux
-void raycast_set_buffers(float* in_buf, float* out_buf, int ray_count, uint32_t collision_mask)
+void raycast_set_buffers(float* ray_buf, float* results_buf, int ray_count, uint32_t collision_mask)
 {
-    t_in_buf         = in_buf;
-    t_out_buf        = out_buf;
+    t_ray_buf        = ray_buf;
+    t_results_buf    = results_buf;
     t_ray_count      = ray_count;
     t_collision_mask = collision_mask;
 }
@@ -242,10 +242,10 @@ This must use `extern "C"` to prevent C++ name mangling, which would break the
 ```cpp
 void RaycastBridgeNative::intersect_rays_direct(PhysicsDirectSpaceState3D* space)
 {
-    if (!space || !t_in_buf || !t_out_buf || t_ray_count <= 0) return;
+    if (!space || !t_ray_buf || !t_results_buf || t_ray_count <= 0) return;
 
-    const float* in  = t_in_buf;
-    float*       dst = t_out_buf;
+    const float* in  = t_ray_buf;
+    float*       dst = t_results_buf;
 
     for (int i = 0; i < t_ray_count; ++i)
     {
