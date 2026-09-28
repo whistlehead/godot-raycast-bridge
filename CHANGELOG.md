@@ -1,5 +1,13 @@
 # Changelog
 
+## [v0.1.8] — 2026-09-28
+
+- Linux x86-64 builds via GitHub Actions (built on Ubuntu 22.04; requires glibc 2.34+)
+- `RaycastBridge.UnpackRay` — reads a packed ray definition back out of the ray buffer (inverse of `PackRay`)
+- `RaycastBridge.UnpackHit` — reads hit flag, position, normal and collider ID for one ray in a single call
+- Renamed the input buffer parameter `inBuffer` → `rayBuffer` (C#) and `in_buffer` → `ray_buffer` (C++ / ClassDB).
+  Positional callers are unaffected; callers using the named argument `inBuffer:` must update it.
+
 ## [v0.1.0] — 2026-04-13
 
 Initial experimental release.
